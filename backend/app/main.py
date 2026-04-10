@@ -8,6 +8,12 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from prometheus_fastapi_instrumentator import Instrumentator
 
+# Import all MCP servers
+from app.mcp.whatsapp import mcp as whatsapp_mcp
+from app.mcp.pms import mcp as pms_mcp
+from app.mcp.pricelabs import mcp as pricelabs_mcp
+from app.mcp.travel import mcp as travel_mcp
+
 from app.workflows.booking_workflow import run_booking_workflow
 
 limiter = Limiter(key_func=get_remote_address)
@@ -46,7 +52,8 @@ async def lifespan(app: FastAPI):
             embedding vector(384),
             tier TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_reasoning_bank_embedding ON reasoning_bank USING hnsw (embedding vector_cosine_ops);
+        CREATE INDEX IF NOT EXISTS idx_reasoning_bank_embedding 
+        ON reasoning_bank USING hnsw (embedding vector_cosine_ops);
     """)
     yield
     await db_pool.close()
@@ -67,3 +74,7 @@ async def webhotelier_webhook(request: Request, verified: bool = Depends(verify_
     payload = await request.json()
     result = await run_booking_workflow(payload, db_pool)
     return result
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)

@@ -1,36 +1,28 @@
-version: '3.9'
-
 services:
   postgres:
     image: pgvector/pgvector:pg17
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-vayancy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vayancy}
+      POSTGRES_USER: vayancy
+      POSTGRES_PASSWORD: vayancy
       POSTGRES_DB: agentic_brain
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WHATSAPP_TOKEN=${WHATSAPP_TOKEN}
       - PHONE_NUMBER_ID=${PHONE_NUMBER_ID}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-vayancy}:${POSTGRES_PASSWORD:-vayancy}@postgres:5432/agentic_brain
+      - DATABASE_URL=postgresql://vayancy:vayancy@postgres:5432/agentic_brain
     volumes:
       - ./backend:/app
 
