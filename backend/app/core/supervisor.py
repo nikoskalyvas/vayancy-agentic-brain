@@ -94,6 +94,53 @@ async def supervisor_node(state: AgentState, config: RunnableConfig) -> AgentSta
 def dynamic_router(state: AgentState):
     return [Send(agent, state) for agent in state.get("next", [])]
 
+# ==================== AGENT NODES ====================
+
+async def guest_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+    try:
+        payload = state["payload"]
+        async with get_mcp_client("http://backend:8000/mcp/whatsapp") as session:
+            resp = await anthropic.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=300,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Write a luxury concierge WhatsApp message: {payload}"}
+                ]
+            )
+            message = resp.content[0].text
+            await session.call_tool("send_luxury_message", {
+                "phone": payload.get("guest_phone"),
+                "message": message
+            })
+        return {"logs": [{"agent": "guest", "status": "completed"}]}
+    except Exception as e:
+        return {"logs": [{"agent": "guest", "status": "error", "details": str(e)}]}
+
+async def revenue_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+    try:
+        payload = state["payload"]
+        async with get_mcp_client("http://backend:8000/mcp/pricelabs") as session:
+            await session.call_tool("adjust_pricing", {
+                "villa_id": payload.get("villa_id"),
+                "new_price": payload.get("suggested_price", 1250),
+                "reason": "dynamic demand adjustment"
+            })
+        return {"logs": [{"agent": "revenue", "status": "completed"}]}
+    except Exception as e:
+        return {"logs": [{"agent": "revenue", "status": "error", "details": str(e)}]}
+
+async def operations_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+    try:
+        payload = state["payload"]
+        async with get_mcp_client("http://backend:8000/mcp/travel") as session:
+            await session.call_tool("get_weather_forecast", {"location": payload.get("villa_location", "Santorini")})
+        return {"logs": [{"agent": "operations", "status": "completed"}]}
+    except Exception as e:
+        return {"logs": [{"agent": "operations", "status": "error", "details": str(e)}]}
+
+# ==================== GRAPH ====================
+
 workflow = StateGraph(AgentState)
 workflow.add_node("supervisor", supervisor_node)
 workflow.add_node("guest", guest_agent_node)
@@ -107,37 +154,3 @@ workflow.add_edge("revenue", END)
 workflow.add_edge("operations", END)
 
 agentic_brain = workflow.compile()
-
-# Agent nodes
-async def guest_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
-    try:
-        payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/whatsapp") as session:
-            resp = await anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=300,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": f"Write luxury WhatsApp message: {payload}"}]
-            )
-            message = resp.content[0].text
-            await session.call_tool("send_luxury_message", {"phone": payload.get("guest_phone"), "message": message})
-        return {"logs": [{"agent": "guest", "status": "completed"}]}
-    except Exception as e:
-        return {"logs": [{"agent": "guest", "status": "error"}]}
-
-async def revenue_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
-    try:
-        payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/pricelabs") as session:
-            await session.call_tool("adjust_pricing", {"villa_id": payload.get("villa_id"), "new_price": 1250, "reason": "dynamic demand"})
-        return {"logs": [{"agent": "revenue", "status": "completed"}]}
-    except Exception as e:
-        return {"logs": [{"agent": "revenue", "status": "error"}]}
-
-async def operations_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
-    try:
-        payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/travel") as session:
-            await session.call_tool("get_weather_forecast", {"location": payload.get("villa_location", "Santorini")})
-        return {"logs": [{"agent": "operations", "status": "completed"}]}
-    except Exception as e:
-        return {"logs": [{"agent": "operations", "status": "error"}]}
