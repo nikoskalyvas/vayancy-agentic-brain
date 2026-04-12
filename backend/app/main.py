@@ -1,57 +1,55 @@
 """
-Vayancy Agentic Brain — main entry point.
+Vayancy Agentic Brain — FastAPI application entry point.
 
-Changes from live code:
-  - DB init moved to session.py (cleaner, includes TravelOS tables)
-  - TravelOS admin/owner API mounted at /travelos
-  - app.state.db_pool exposed for dependency injection in routers
-  - CORS updated to include PATCH method (needed for property updates)
+MCP servers run as separate processes on ports 3001-3005.
+TravelOS Admin API is mounted at /travelos.
 """
 from __future__ import annotations
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+import arq
+import structlog
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import settings
+from app.core.memory import AgentMemory
 from app.db.session import get_pool, close_pool, init_schema
-from app.workflows.booking_workflow import run_booking_workflow
+from app.api.webhooks import router as webhook_router
+from app.api.stream import router as stream_router
+from app.api.travelos import router as travelos_router   # ← NEW
 
-# MCP servers
-from app.mcp.whatsapp  import mcp as whatsapp_mcp
-from app.mcp.pms       import mcp as pms_mcp
-from app.mcp.pricelabs import mcp as pricelabs_mcp
-from app.mcp.travel    import mcp as travel_mcp
-from app.mcp.hospitality import mcp as hospitality_mcp
-
-# TravelOS API
-from app.api.travelos import router as travelos_router
-
-limiter = Limiter(key_func=get_remote_address)
+log = structlog.get_logger()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all DB tables (original + TravelOS)
-    await init_schema()
-    pool = await get_pool()
-    app.state.db_pool = pool   # exposed for travelos router
+    log.info("startup_begin", environment=settings.environment)
 
+    await init_schema()   # creates all tables including TravelOS tables
+    pool = await get_pool()
+
+    app.state.memory   = AgentMemory(pool)
+    app.state.db_pool  = pool   # ← exposed for travelos router dependency
+
+    app.state.arq_pool = await arq.create_pool(
+        arq.connections.RedisSettings.from_dsn(settings.redis_url)
+    )
+
+    log.info("startup_complete")
     yield
 
+    await app.state.arq_pool.close()
     await close_pool()
+    log.info("shutdown_complete")
 
 
 app = FastAPI(
     title="Vayancy Agentic Brain",
-    version="7.0.0",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
-app.state.limiter = limiter
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://owners.vayancy.gr", "http://localhost:3000"],
@@ -59,34 +57,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Instrumentator().instrument(app).expose(app)
+app.include_router(webhook_router)
+app.include_router(stream_router)
+app.include_router(travelos_router, prefix="/travelos")   # ← NEW
 
-# ── MCP servers (mounted in-process, same as live) ────────────────────────────
-app.mount("/mcp/whatsapp",    whatsapp_mcp.sse_app())
-app.mount("/mcp/pms",         pms_mcp.sse_app())
-app.mount("/mcp/pricelabs",   pricelabs_mcp.sse_app())
-app.mount("/mcp/travel",      travel_mcp.sse_app())
-app.mount("/mcp/hospitality", hospitality_mcp.sse_app())
-
-# ── TravelOS REST API ─────────────────────────────────────────────────────────
-app.include_router(travelos_router, prefix="/travelos")
-
-
-# ── Webhooks ──────────────────────────────────────────────────────────────────
-@app.post("/webhook/webhotelier")
-@limiter.limit("100/minute")
-async def webhotelier_webhook(request: Request):
-    payload = await request.json()
-    pool    = request.app.state.db_pool
-    result  = await run_booking_workflow(payload, pool)
-    return result
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "version": "7.0.0"}
+# Docs note:
+#   GET  /travelos/admin/tenants          — list all tenants (admin)
+#   POST /travelos/admin/tenants          — register new tenant (admin)
+#   POST /travelos/me/rotate-key          — rotate API key (owner)
+#   POST /travelos/me/properties          — register property in catalog (owner)
+#   GET  /travelos/me/properties          — list my properties (owner)
+#   PATCH /travelos/me/properties/{id}    — update property (owner)
+#   GET  /travelos/me/bookings            — booking dashboard (owner)
+#   GET  /travelos/me/stats               — summary stats (owner)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.environment == "development",
+    )

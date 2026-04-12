@@ -1,6 +1,5 @@
 """
-Centralised settings — replaces scattered os.getenv() calls throughout the codebase.
-All env vars are validated at startup via pydantic-settings.
+Centralised settings — all env vars validated at startup.
 """
 from __future__ import annotations
 from functools import lru_cache
@@ -11,6 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     environment: str = "development"
+    secret_key:  str = "change-me-min-32-chars-in-production"
+    property_id: str = "default"
 
     # Anthropic
     anthropic_api_key: str
@@ -19,33 +20,35 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql://vayancy:vayancy@postgres:5432/agentic_brain"
 
-    # Redis (for ARQ worker + hold expiry cron)
+    # Redis
     redis_url: str = "redis://redis:6379/0"
 
-    # WhatsApp
-    whatsapp_token:      str = ""
-    phone_number_id:     str = ""
-    webhook_secret:      str = ""
+    # ARQ worker
+    worker_job_timeout: int = 300
 
     # WebHotelier
-    webhotelier_api_key:       str = ""
-    webhotelier_property_id:   str = ""
-    webhotelier_api_base:      str = "https://api.webhotelier.net/v2"
+    webhotelier_api_key:        str = ""
+    webhotelier_property_id:    str = ""
+    webhotelier_webhook_secret: str = ""
+    webhotelier_api_base:       str = "https://api.webhotelier.net/v2"
+
+    # WhatsApp
+    whatsapp_access_token:         str = ""
+    whatsapp_phone_number_id:      str = ""
+    whatsapp_webhook_verify_token: str = ""
+    whatsapp_api_base:             str = "https://graph.facebook.com/v20.0"
+    owner_whatsapp_phone:          str = ""
+
+    # PriceLabs
+    pricelabs_api_key:     str = ""
+    pricelabs_property_id: str = ""
+    pricelabs_api_base:    str = "https://api.pricelabs.co/v1"
 
     # Epsilon Net (Greek tax)
     epsilon_net_username:   str = ""
     epsilon_net_password:   str = ""
     epsilon_net_company_id: str = ""
     epsilon_net_api_url:    str = "https://api.epsilonnet.gr/v1"
-
-    # PriceLabs
-    pricelabs_api_key:    str = ""
-    pricelabs_property_id: str = ""
-
-    # App
-    secret_key:              str = "change-me-min-32-chars-in-production"
-    property_id:             str = "default"
-    worker_job_timeout:      int = 300
 
     # TravelOS
     travelos_commission_pct: float = 5.0

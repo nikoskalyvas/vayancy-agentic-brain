@@ -1,84 +1,126 @@
 services:
 
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
   postgres:
-    image: pgvector/pgvector:pg17
-    restart: always
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
-      POSTGRES_USER:     vayancy
-      POSTGRES_PASSWORD: vayancy
-      POSTGRES_DB:       agentic_brain
-    ports:
-      - "5432:5432"
+      POSTGRES_DB:       vayancy
+      POSTGRES_USER:     ${POSTGRES_USER:-vayancy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vayancy -d agentic_brain"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vayancy}"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    restart: always
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  backend:
+  # ── MCP Servers — each a separate process on its own port ───────────────────
+
+  mcp-webhotelier:
     build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_WEBHOTELIER_PORT: "3001"
+    ports:
+      - "3001:3001"
+    command: python -m app.mcp.webhotelier
+
+  mcp-whatsapp:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_WHATSAPP_PORT: "3002"
+    ports:
+      - "3002:3002"
+    command: python -m app.mcp.whatsapp
+
+  mcp-pricelabs:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_PRICELABS_PORT: "3003"
+    ports:
+      - "3003:3003"
+    command: python -m app.mcp.pricelabs
+
+  mcp-epsilonnet:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_EPSILONNET_PORT: "3004"
+    ports:
+      - "3004:3004"
+    command: python -m app.mcp.epsilonnet
+
+  # ── Core API ─────────────────────────────────────────────────────────────────
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql://vayancy:vayancy@postgres:5432/agentic_brain
-      REDIS_URL:    redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+
+  # ── ARQ Worker ───────────────────────────────────────────────────────────────
+
+  worker:
+    build: ./backend
     restart: unless-stopped
-
-  prometheus:
-    image: prom/prometheus:latest
-    restart: always
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.retention.time=15d'
+    env_file: .env
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m arq app.queue.worker.WorkerSettings
 
-  grafana:
-    image: grafana/grafana:latest
-    restart: always
+  # ── Owner Dashboard ───────────────────────────────────────────────────────────
+
+  dashboard:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL:     http://api:8000
+        NEXT_PUBLIC_PROPERTY_ID: ${PROPERTY_ID:-default}
+    restart: unless-stopped
+    env_file: .env
     ports:
-      - "3001:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER:     admin
-      GF_SECURITY_ADMIN_PASSWORD: vayancy_grafana
-      GF_USERS_ALLOW_SIGN_UP:     "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      - "3000:3000"
     depends_on:
-      - prometheus
+      api:
+        condition: service_healthy
+
 
 volumes:
   postgres_data:
   redis_data:
-  prometheus_data:
-  grafana_data:

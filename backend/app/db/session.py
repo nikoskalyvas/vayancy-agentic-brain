@@ -1,7 +1,5 @@
 """
-Database session management.
-Single pool, created once at startup, shared across the app.
-All table creation happens here — including TravelOS tables.
+Database session — single pool, all table creation in one place.
 """
 from __future__ import annotations
 import asyncpg
@@ -30,23 +28,29 @@ async def close_pool() -> None:
 
 
 async def init_schema() -> None:
-    """Create all tables. Safe to call multiple times (IF NOT EXISTS)."""
+    """Create all tables on startup. Safe to call multiple times."""
     pool = await get_pool()
     async with pool.acquire() as conn:
 
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-        # ── Original tables ───────────────────────────────────────────────────
+        # ── Core tables ───────────────────────────────────────────────────────
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS workflow_logs (
                 id          TEXT PRIMARY KEY,
-                timestamp   TIMESTAMPTZ NOT NULL,
+                workflow_id TEXT NOT NULL,
+                event_id    TEXT,
+                property_id TEXT NOT NULL DEFAULT 'default',
                 agent       TEXT NOT NULL,
                 action      TEXT NOT NULL,
                 status      TEXT NOT NULL,
-                details     TEXT,
-                workflow_id TEXT NOT NULL
+                details     JSONB,
+                timestamp   TIMESTAMPTZ DEFAULT NOW()
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_logs_event_id
+                ON workflow_logs (event_id) WHERE event_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_workflow_logs_property
+                ON workflow_logs (property_id, timestamp DESC);
         """)
 
         await conn.execute("""
@@ -57,19 +61,91 @@ async def init_schema() -> None:
                 tier      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_reasoning_bank_embedding
-                ON reasoning_bank USING hnsw (embedding vector_cosine_ops);
+                ON reasoning_bank USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS guests (
+                id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                property_id    TEXT NOT NULL DEFAULT 'default',
+                phone          TEXT NOT NULL,
+                name           TEXT,
+                email          TEXT,
+                language       TEXT DEFAULT 'en',
+                nationality    TEXT,
+                preferences    TEXT,
+                upsell_history JSONB DEFAULT '[]',
+                created_at     TIMESTAMPTZ DEFAULT NOW(),
+                updated_at     TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (property_id, phone)
+            );
+            CREATE INDEX IF NOT EXISTS idx_guests_property_phone
+                ON guests (property_id, phone);
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS guest_interactions (
+                id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                property_id    TEXT NOT NULL DEFAULT 'default',
+                guest_phone    TEXT,
+                reservation_id TEXT,
+                direction      TEXT CHECK (direction IN ('inbound','outbound')),
+                channel        TEXT DEFAULT 'whatsapp',
+                content        TEXT NOT NULL,
+                embedding      vector(384),
+                created_at     TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_guest_interactions_embedding
+                ON guest_interactions
+                USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
+            CREATE INDEX IF NOT EXISTS idx_guest_interactions_property_phone
+                ON guest_interactions (property_id, guest_phone);
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pricing_decisions (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workflow_id   TEXT,
+                property_id   TEXT NOT NULL DEFAULT 'default',
+                date_from     DATE,
+                date_to       DATE,
+                rates_applied JSONB,
+                rationale     TEXT,
+                created_at    TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_pricing_property
+                ON pricing_decisions (property_id, created_at DESC);
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS escalations (
+                id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                property_id    TEXT NOT NULL DEFAULT 'default',
+                workflow_id    TEXT,
+                guest_phone    TEXT,
+                reason         TEXT NOT NULL,
+                guest_message  TEXT,
+                agent_output   TEXT,
+                owner_notified BOOLEAN DEFAULT FALSE,
+                resolved       BOOLEAN DEFAULT FALSE,
+                created_at     TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_escalations_property
+                ON escalations (property_id, resolved, created_at DESC);
         """)
 
         # ── TravelOS tables ───────────────────────────────────────────────────
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS travelos_tenants (
-                id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name         TEXT NOT NULL,
-                api_key      TEXT NOT NULL UNIQUE,
-                pms_type     TEXT NOT NULL DEFAULT 'webhotelier',
-                pms_config   JSONB NOT NULL DEFAULT '{}',
-                active       BOOLEAN DEFAULT TRUE,
-                created_at   TIMESTAMPTZ DEFAULT NOW()
+                id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name       TEXT NOT NULL,
+                api_key    TEXT NOT NULL UNIQUE,
+                pms_type   TEXT NOT NULL DEFAULT 'webhotelier',
+                pms_config JSONB NOT NULL DEFAULT '{}',
+                active     BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             );
             CREATE INDEX IF NOT EXISTS idx_travelos_tenants_key
                 ON travelos_tenants (api_key);
@@ -128,22 +204,22 @@ async def init_schema() -> None:
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS travelos_bookings (
-                id               UUID PRIMARY KEY,
-                tenant_id        UUID NOT NULL REFERENCES travelos_tenants(id),
-                idempotency_key  TEXT NOT NULL UNIQUE,
-                pms_booking_id   TEXT NOT NULL,
-                unit_id          TEXT NOT NULL,
-                check_in         TEXT NOT NULL,
-                check_out        TEXT NOT NULL,
-                guests           INT  NOT NULL,
-                guest_name       TEXT NOT NULL,
-                guest_email      TEXT NOT NULL,
-                guest_phone      TEXT,
-                status           TEXT NOT NULL DEFAULT 'confirmed',
-                channel          TEXT DEFAULT 'travelos_mcp',
-                commission_pct   NUMERIC(5,2) DEFAULT 5.00,
-                notes            TEXT,
-                created_at       TIMESTAMPTZ DEFAULT NOW()
+                id              UUID PRIMARY KEY,
+                tenant_id       UUID NOT NULL REFERENCES travelos_tenants(id),
+                idempotency_key TEXT NOT NULL UNIQUE,
+                pms_booking_id  TEXT NOT NULL,
+                unit_id         TEXT NOT NULL,
+                check_in        TEXT NOT NULL,
+                check_out       TEXT NOT NULL,
+                guests          INT  NOT NULL,
+                guest_name      TEXT NOT NULL,
+                guest_email     TEXT NOT NULL,
+                guest_phone     TEXT,
+                status          TEXT NOT NULL DEFAULT 'confirmed',
+                channel         TEXT DEFAULT 'travelos_mcp',
+                commission_pct  NUMERIC(5,2) DEFAULT 5.00,
+                notes           TEXT,
+                created_at      TIMESTAMPTZ DEFAULT NOW()
             );
             CREATE INDEX IF NOT EXISTS idx_travelos_bookings_tenant
                 ON travelos_bookings (tenant_id, created_at DESC);
