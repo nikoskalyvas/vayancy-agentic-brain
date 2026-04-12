@@ -1,3 +1,11 @@
+"""
+Supervisor — fixed self-loop bug from live code.
+
+Live code called http://backend:8000/mcp/whatsapp from inside the backend.
+Fix: agents now import and call MCP tool functions directly.
+"""
+from __future__ import annotations
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send, RunnableConfig
 from pydantic import BaseModel
@@ -7,25 +15,33 @@ from anthropic import AsyncAnthropic
 import uuid
 from datetime import datetime, timezone
 import asyncpg
-import os
 import json
-from app.core.mcp_client import get_mcp_client
+
+from app.config import settings
 from app.core.memory import AgentMemory
 from app.core.security import aidefence_guard, hook
 
-anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-memory = None
+# Direct imports — no HTTP self-loop
+from app.mcp.whatsapp import send_luxury_message as _send_whatsapp
+from app.mcp.pricelabs import adjust_pricing as _adjust_pricing
+from app.mcp.travel import get_weather_forecast as _get_weather
+
+anthropic = AsyncAnthropic(api_key=settings.anthropic_api_key)
+_memory: AgentMemory | None = None
+
 
 class AgentState(TypedDict):
     workflow_id: str
-    payload: dict
-    logs: Annotated[List[dict], operator.add]
-    next: List[str] = []
+    payload:     dict
+    logs:        Annotated[List[dict], operator.add]
+    next:        List[str]
+
 
 class RoutingDecision(BaseModel):
-    agents: List[Literal["guest", "revenue", "operations"]]
-    reason: str
+    agents:   List[Literal["guest", "revenue", "operations"]]
+    reason:   str
     parallel: bool
+
 
 SYSTEM_PROMPT = """
 You are the Cognitive Core of Vayancy Agentic Brain for ultra-luxury private villas in Greece.
@@ -33,124 +49,144 @@ Priorities: Guest delight > Revenue optimization > Operational excellence.
 Tone: Warm, sophisticated, concierge-level. Never robotic.
 """
 
-@hook("pre_supervisor")
-async def supervisor_node(state: AgentState, config: RunnableConfig) -> AgentState:
-    global memory
-    db: asyncpg.Pool = config["configurable"]["db_pool"]
-    if memory is None:
-        memory = AgentMemory(db)
 
-    payload = state["payload"]
+@hook("pre_supervisor")
+async def supervisor_node(state: AgentState, config: RunnableConfig) -> dict:
+    global _memory
+    db: asyncpg.Pool = config["configurable"]["db_pool"]
+    if _memory is None:
+        _memory = AgentMemory(db)
+
+    payload  = state["payload"]
     event_id = payload.get("event_id") or str(uuid.uuid4())
 
-    # Idempotency check
-    existing = await db.fetchval("SELECT 1 FROM workflow_logs WHERE details->>'event_id' = $1 LIMIT 1", event_id)
+    # Idempotency
+    existing = await db.fetchval(
+        "SELECT 1 FROM workflow_logs WHERE details::jsonb->>'event_id' = $1 LIMIT 1",
+        event_id,
+    )
     if existing:
-        print(f"🔁 Idempotency: Event {event_id} already processed")
-        return {"next": []}
+        return {"next": [], "logs": []}
 
     if not await aidefence_guard(str(payload)):
-        return {"next": []}
+        return {"next": [], "logs": []}
 
     payload_text = str(payload)
-    past = await memory.retrieve_relevant(payload_text)
+    past         = await _memory.retrieve_relevant(payload_text)
+    memory_str   = "\n".join(p["content"] for p in past) or "No prior similar events."
 
-    memory_str = "\n".join([p["content"] for p in past]) if past else "No prior similar events."
-
-    prompt = f"{SYSTEM_PROMPT}\n\nRelevant past events:\n{memory_str}\n\nNew event: {payload_text}\nDecide which agents should run."
+    prompt = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Relevant past events:\n{memory_str}\n\n"
+        f"New event: {payload_text}\n"
+        f"Decide which agents should run."
+    )
 
     try:
         response = await anthropic.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=settings.anthropic_model,
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
-            tools=[{"name": "route_workflow", "description": "Decide agents", "input_schema": RoutingDecision.model_json_schema()}],
+            tools=[{
+                "name":        "route_workflow",
+                "description": "Decide which agents to run",
+                "input_schema": RoutingDecision.model_json_schema(),
+            }],
             tool_choice={"type": "tool", "name": "route_workflow"},
-            timeout=15.0
+            timeout=15.0,
         )
     except Exception as e:
-        print(f"⏰ LLM timeout or error: {e}")
-        return {"next": []}
+        print(f"⏰ Supervisor LLM error: {e}")
+        return {"next": [], "logs": []}
 
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if not tool_use:
-        raise ValueError("Claude did not return tool_use block")
+        return {"next": [], "logs": []}
 
-    decision: RoutingDecision = RoutingDecision.model_validate(tool_use.input)
+    decision = RoutingDecision.model_validate(tool_use.input)
 
     await db.execute(
-        """INSERT INTO workflow_logs (id, timestamp, agent, action, status, details, workflow_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-        str(uuid.uuid4()), datetime.now(timezone.utc), "supervisor",
-        "routing_decision", "completed",
+        """
+        INSERT INTO workflow_logs (id, timestamp, agent, action, status, details, workflow_id)
+        VALUES ($1, $2, 'supervisor', 'routing_decision', 'completed', $3, $4)
+        """,
+        str(uuid.uuid4()),
+        datetime.now(timezone.utc),
         json.dumps({"event_id": event_id, **payload}),
-        state["workflow_id"]
+        state["workflow_id"],
     )
+    await _memory.store_pattern(f"workflow_{state['workflow_id']}", payload_text)
 
-    await memory.store_pattern(f"workflow_{state['workflow_id']}", payload_text)
+    agents = decision.agents if decision.parallel else [decision.agents[0]]
+    return {"next": agents, "logs": [{"agent": "supervisor", "status": "completed"}]}
 
-    return {"next": decision.agents if decision.parallel else [decision.agents[0]]}
 
 def dynamic_router(state: AgentState):
     return [Send(agent, state) for agent in state.get("next", [])]
 
-# ==================== AGENT NODES ====================
 
-async def guest_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+# ── Agent nodes — call tools directly, no HTTP self-loop ──────────────────────
+
+async def guest_agent_node(state: AgentState, config: RunnableConfig) -> dict:
     try:
         payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/whatsapp") as session:
-            resp = await anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=300,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Write a luxury concierge WhatsApp message: {payload}"}
-                ]
-            )
-            message = resp.content[0].text
-            await session.call_tool("send_luxury_message", {
-                "phone": payload.get("guest_phone"),
-                "message": message
-            })
-        return {"logs": [{"agent": "guest", "status": "completed"}]}
+        resp    = await anthropic.messages.create(
+            model=settings.anthropic_model,
+            max_tokens=300,
+            messages=[
+                {"role": "user", "content": (
+                    f"{SYSTEM_PROMPT}\n\n"
+                    f"Write a luxury concierge WhatsApp message for: {payload}"
+                )},
+            ],
+        )
+        message = resp.content[0].text
+        # Call directly — no HTTP
+        result  = await _send_whatsapp(
+            phone=payload.get("guest_phone", ""),
+            message=message,
+        )
+        return {"logs": [{"agent": "guest", "status": "completed", "details": result}]}
     except Exception as e:
         return {"logs": [{"agent": "guest", "status": "error", "details": str(e)}]}
 
-async def revenue_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+
+async def revenue_agent_node(state: AgentState, config: RunnableConfig) -> dict:
     try:
         payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/pricelabs") as session:
-            await session.call_tool("adjust_pricing", {
-                "villa_id": payload.get("villa_id"),
-                "new_price": payload.get("suggested_price", 1250),
-                "reason": "dynamic demand adjustment"
-            })
-        return {"logs": [{"agent": "revenue", "status": "completed"}]}
+        result  = await _adjust_pricing(
+            villa_id=payload.get("villa_id", "unknown"),
+            new_price=float(payload.get("suggested_price", 1250)),
+            reason="dynamic demand adjustment",
+        )
+        return {"logs": [{"agent": "revenue", "status": "completed", "details": result}]}
     except Exception as e:
         return {"logs": [{"agent": "revenue", "status": "error", "details": str(e)}]}
 
-async def operations_agent_node(state: AgentState, config: RunnableConfig) -> AgentState:
+
+async def operations_agent_node(state: AgentState, config: RunnableConfig) -> dict:
     try:
         payload = state["payload"]
-        async with get_mcp_client("http://backend:8000/mcp/travel") as session:
-            await session.call_tool("get_weather_forecast", {"location": payload.get("villa_location", "Santorini")})
-        return {"logs": [{"agent": "operations", "status": "completed"}]}
+        result  = await _get_weather(
+            location=payload.get("villa_location", "Santorini"),
+        )
+        return {"logs": [{"agent": "operations", "status": "completed", "details": result}]}
     except Exception as e:
         return {"logs": [{"agent": "operations", "status": "error", "details": str(e)}]}
 
-# ==================== GRAPH ====================
+
+# ── Graph ─────────────────────────────────────────────────────────────────────
 
 workflow = StateGraph(AgentState)
-workflow.add_node("supervisor", supervisor_node)
-workflow.add_node("guest", guest_agent_node)
-workflow.add_node("revenue", revenue_agent_node)
-workflow.add_node("operations", operations_agent_node)
+workflow.add_node("supervisor",  supervisor_node)
+workflow.add_node("guest",       guest_agent_node)
+workflow.add_node("revenue",     revenue_agent_node)
+workflow.add_node("operations",  operations_agent_node)
 
 workflow.add_edge(START, "supervisor")
 workflow.add_conditional_edges("supervisor", dynamic_router)
-workflow.add_edge("guest", END)
-workflow.add_edge("revenue", END)
+workflow.add_edge("guest",      END)
+workflow.add_edge("revenue",    END)
 workflow.add_edge("operations", END)
 
 agentic_brain = workflow.compile()
