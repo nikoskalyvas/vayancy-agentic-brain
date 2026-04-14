@@ -59,3 +59,29 @@ def verify_webhotelier_signature(body: bytes, signature_header: str, secret: str
 def verify_whatsapp_token(token: str, expected: str) -> bool:
     """Verify WhatsApp webhook verification challenge token."""
     return hmac.compare_digest(token, expected)
+
+
+def verify_whatsapp_hmac(body: bytes, signature_header: str, app_secret: str) -> bool:
+    """
+    Fix #5: Verify Meta X-Hub-Signature-256 on inbound WhatsApp webhooks.
+
+    Meta sends X-Hub-Signature-256: sha256=<hex_digest> on every POST,
+    computed using the WhatsApp App Secret as the HMAC key.
+    Without this check, anyone who discovers the webhook URL can POST
+    arbitrary payloads that bypass the injection guard and enter the queue.
+
+    signature_header: value of X-Hub-Signature-256 header
+    app_secret: WHATSAPP_APP_SECRET from .env (the Meta App Secret, NOT the
+                access token — these are different credentials)
+    """
+    if not signature_header.startswith("sha256="):
+        return False
+    if not app_secret:
+        return False
+    expected = hmac.new(
+        app_secret.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    received = signature_header[len("sha256="):]
+    return hmac.compare_digest(expected, received)

@@ -101,31 +101,76 @@ async def send_template_message(
 
 
 @mcp.tool()
-async def get_message_thread(guest_phone: str, limit: int = 20) -> str:
-    """Return recent conversation thread with a guest from the database."""
+async def get_message_thread(
+    guest_phone: str,
+    property_id: str = "",
+    limit: int = 20,
+) -> str:
+    """
+    Return recent conversation thread with a guest from the database.
+
+    Fix #6: property_id filter prevents thread mixing across properties.
+    The same guest phone on two different properties previously returned
+    a merged thread — exposing one property's conversation to another.
+
+    Args:
+        guest_phone: E.164 guest phone number
+        property_id: Property slug (e.g. "villa-azure"). Falls back to the
+                     PROPERTY_ID env var for single-property deployments.
+        limit:       Max messages to return (default 20)
+    """
     if not _DB_URL:
         return "[]"
+
+    # Fall back to env var for single-property deployments.
+    _pid = property_id.strip() or os.getenv("PROPERTY_ID", "")
+
     try:
         conn = await asyncpg.connect(_DB_URL)
-        rows = await conn.fetch(
-            """
-            SELECT direction, content, created_at
-            FROM guest_interactions
-            WHERE guest_phone = $1
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            guest_phone, limit,
-        )
+
+        if _pid:
+            rows = await conn.fetch(
+                """
+                SELECT direction, content, created_at
+                FROM   guest_interactions
+                WHERE  guest_phone = $1
+                  AND  property_id = $3
+                ORDER  BY created_at DESC
+                LIMIT  $2
+                """,
+                guest_phone, limit, _pid,
+            )
+        else:
+            # No property_id available — degraded mode, log warning
+            log.warning(
+                "get_message_thread_no_property_id",
+                guest_phone=guest_phone,
+                note="Thread not scoped to property — safe on single-property only",
+            )
+            rows = await conn.fetch(
+                """
+                SELECT direction, content, created_at
+                FROM   guest_interactions
+                WHERE  guest_phone = $1
+                ORDER  BY created_at DESC
+                LIMIT  $2
+                """,
+                guest_phone, limit,
+            )
+
         await conn.close()
         thread = [
-            {"direction": r["direction"], "content": r["content"],
-             "at": str(r["created_at"])}
+            {
+                "direction": r["direction"],
+                "content":   r["content"],
+                "at":        str(r["created_at"]),
+            }
             for r in reversed(rows)
         ]
         return json.dumps(thread, ensure_ascii=False)
+
     except Exception as e:
-        log.error("get_thread_failed", error=str(e))
+        log.error("get_thread_failed", error=str(e), guest_phone=guest_phone)
         return json.dumps({"error": str(e), "thread": []})
 
 

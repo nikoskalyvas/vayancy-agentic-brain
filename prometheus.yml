@@ -1,9 +1,8 @@
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: 'vayancy-backend'
+  - job_name: 'vayancy-api'
     static_configs:
-      - targets: ['backend:8000']
-    metrics_path: /metrics
+      - targets: ['api:8000']
+    metrics_path: '/metrics'

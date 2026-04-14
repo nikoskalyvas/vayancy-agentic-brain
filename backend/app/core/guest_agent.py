@@ -31,7 +31,7 @@ one exists. Use it to personalise every message:
 
 ### On booking.confirmed
 1. Call get_reservation to fetch full reservation details
-2. Call get_message_thread to check if this guest has history
+2. Call get_message_thread(guest_phone=<phone>, property_id=<property_id>) to check if this guest has history — ALWAYS pass property_id
 3. Send a personalised welcome via send_template_message (template:
    welcome_booking). Variables: [guest_first_name, property_name,
    checkin_date, checkin_time, property_address]
@@ -39,7 +39,7 @@ one exists. Use it to personalise every message:
 5. End with an open invitation to ask anything
 
 ### On whatsapp.message (inbound)
-1. Call get_message_thread FIRST — read the full thread before replying
+1. Call get_message_thread(guest_phone=<phone>, property_id=<property_id>) FIRST — ALWAYS pass property_id to avoid cross-property thread mixing
 2. Call mark_message_read for the message_id
 3. Respond to the inquiry with specific, accurate information
 4. If you don't know something, say you'll check and follow up — never guess

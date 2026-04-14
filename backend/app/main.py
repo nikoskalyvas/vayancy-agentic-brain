@@ -16,8 +16,13 @@ from app.config import settings
 from app.core.memory import AgentMemory
 from app.db.session import get_pool, close_pool, init_schema
 from app.api.webhooks import router as webhook_router
-from app.api.stream import router as stream_router
-from app.api.travelos import router as travelos_router   # ← NEW
+from app.api.stream   import router as stream_router
+from app.api.travelos import router as travelos_router
+from app.api.insights    import router as insights_router    # Stage 4
+from app.api.hitl        import router as hitl_router        # Stage 4
+from app.api.properties  import router as properties_router  # Stage 5
+from app.api.payments       import router as payments_router       # Stripe
+from app.api.dispute_defense import router as dispute_router        # Dispute prevention
 
 log = structlog.get_logger()
 
@@ -46,7 +51,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Vayancy Agentic Brain",
-    version="3.0.0",
+    version="5.2.0",
     lifespan=lifespan,
 )
 
@@ -59,17 +64,35 @@ app.add_middleware(
 
 app.include_router(webhook_router)
 app.include_router(stream_router)
-app.include_router(travelos_router, prefix="/travelos")   # ← NEW
+app.include_router(travelos_router, prefix="/travelos")
+app.include_router(insights_router, prefix="/insights")  # Stage 4
+app.include_router(hitl_router,       prefix="/hitl")        # Stage 4
+app.include_router(properties_router, prefix="/properties")  # Stage 5
+app.include_router(payments_router,   prefix="/payments")      # Stripe
+app.include_router(dispute_router,    prefix="/dispute")       # Dispute prevention
 
-# Docs note:
-#   GET  /travelos/admin/tenants          — list all tenants (admin)
-#   POST /travelos/admin/tenants          — register new tenant (admin)
-#   POST /travelos/me/rotate-key          — rotate API key (owner)
-#   POST /travelos/me/properties          — register property in catalog (owner)
-#   GET  /travelos/me/properties          — list my properties (owner)
-#   PATCH /travelos/me/properties/{id}    — update property (owner)
-#   GET  /travelos/me/bookings            — booking dashboard (owner)
-#   GET  /travelos/me/stats               — summary stats (owner)
+# Route reference:
+#
+# TravelOS
+#   GET  /travelos/admin/tenants
+#   POST /travelos/admin/tenants
+#   POST /travelos/me/rotate-key
+#   POST /travelos/me/properties
+#   GET  /travelos/me/properties
+#   PATCH /travelos/me/properties/{id}
+#   GET  /travelos/me/bookings
+#   GET  /travelos/me/stats
+#
+# Insights (Stage 4)
+#   POST /insights/query              — natural language → SQL → narrative
+#   GET  /insights/history            — last N queries
+#
+# HITL (Stage 4)
+#   GET  /hitl/pending                — revenue decisions awaiting approval
+#   GET  /hitl/{id}                   — single decision detail
+#   POST /hitl/{id}/approve           — owner approves → re-enqueued
+#   POST /hitl/{id}/reject            — owner rejects → recorded
+#   GET  /hitl/history/all            — full decision history
 
 
 if __name__ == "__main__":

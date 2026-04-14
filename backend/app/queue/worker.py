@@ -186,6 +186,122 @@ async def scheduled_checkout_dispatch(ctx: dict) -> None:
     )
 
 
+async def pre_arrival_reminders(ctx: dict) -> None:
+    """
+    Daily 09:00 — send pre-arrival reminder to guests checking in 3 days from now.
+    Message includes: property name, charge date, amount, policies reminder.
+    Stored as evidence with WA message ID.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT b.id, b.guest_name, b.guest_email, b.guest_phone,
+               b.check_in, b.check_out, b.guests, b.tenant_id,
+               p.name AS property_name
+        FROM   travelos_bookings b
+        JOIN   travelos_properties p ON p.pms_unit_id = b.unit_id
+                                    AND p.tenant_id   = b.tenant_id
+        WHERE  b.check_in = (CURRENT_DATE + INTERVAL '3 days')::text
+          AND  b.status   = 'confirmed'
+        """
+    )
+    log.info("pre_arrival_reminders", count=len(rows))
+    for r in rows:
+        try:
+            # Send pre-arrival email
+            from app.core.email import send_pre_arrival_email
+            await send_pre_arrival_email(
+                to=r["guest_email"],
+                guest_name=r["guest_name"],
+                property_name=r["property_name"],
+                check_in=r["check_in"],
+                charge_date=r["check_in"],
+            )
+        except Exception as e:
+            log.warning("pre_arrival_email_failed", booking_id=str(r["id"]), error=str(e))
+
+        try:
+            import httpx as _h
+            await _h.AsyncClient(timeout=5).post(
+                f"http://localhost:8000/dispute/send-messages",
+                headers={"Authorization": f"Bearer {settings.secret_key}"},
+                json={
+                    "booking_ref":   str(r["id"]),
+                    "property_id":   str(r["tenant_id"]),
+                    "property_name": r["property_name"],
+                    "guest_name":    r["guest_name"],
+                    "guest_email":   r["guest_email"],
+                    "guest_phone":   r["guest_phone"] or "",
+                    "check_in":      r["check_in"],
+                    "check_out":     r["check_out"],
+                    "guests":        r["guests"],
+                    "charge_date":   r["check_in"],
+                    "message_type":  "pre_arrival",
+                },
+            )
+        except Exception as e:
+            log.warning("pre_arrival_reminder_failed",
+                        booking_id=str(r["id"]), error=str(e))
+
+
+async def charge_day_notices(ctx: dict) -> None:
+    """
+    Daily 07:00 — send charge notice to guests checking in today.
+    "Your card will be charged today." — eliminates 'I didn't know I'd be charged' disputes.
+    Also triggers pre-auth capture for Stripe-payment bookings.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT b.id, b.guest_name, b.guest_email, b.guest_phone,
+               b.check_in, b.channel, b.tenant_id,
+               p.name AS property_name
+        FROM   travelos_bookings b
+        JOIN   travelos_properties p ON p.pms_unit_id = b.unit_id
+                                    AND p.tenant_id   = b.tenant_id
+        WHERE  b.check_in = CURRENT_DATE::text
+          AND  b.status   = 'confirmed'
+        """
+    )
+    log.info("charge_day_notices", count=len(rows))
+    for r in rows:
+        try:
+            import httpx as _h
+            client = _h.AsyncClient(timeout=5)
+
+            # Send charge notice message
+            if r["guest_phone"]:
+                await client.post(
+                    "http://localhost:8000/dispute/send-messages",
+                    headers={"Authorization": f"Bearer {settings.secret_key}"},
+                    json={
+                        "booking_ref":   str(r["id"]),
+                        "property_id":   str(r["tenant_id"]),
+                        "property_name": r["property_name"],
+                        "guest_name":    r["guest_name"],
+                        "guest_email":   r["guest_email"],
+                        "guest_phone":   r["guest_phone"],
+                        "check_in":      r["check_in"],
+                        "check_out":     r["check_in"],
+                        "guests":        1,
+                        "charge_date":   r["check_in"],
+                        "message_type":  "charge_notice",
+                    },
+                )
+
+            # Capture pre-auth for Stripe-payment bookings
+            if r["channel"] == "travelos_stripe":
+                await client.post(
+                    f"http://localhost:8000/payments/capture/{r['id']}",
+                    headers={"Authorization": f"Bearer {settings.secret_key}"},
+                )
+                log.info("auto_capture_triggered", booking_id=str(r["id"]))
+
+        except Exception as e:
+            log.warning("charge_day_notice_failed",
+                        booking_id=str(r["id"]), error=str(e))
+
+
 async def expire_stale_holds(ctx: dict) -> None:
     """
     TravelOS: mark holds whose TTL has passed as 'expired'.
@@ -229,7 +345,11 @@ class WorkerSettings:
     functions       = [run_booking_workflow, run_whatsapp_reply_workflow]
     cron_jobs       = [
         cron(scheduled_pricing_review,    hour={0, 4, 8, 12, 16, 20}, minute=0),
-        cron(scheduled_checkout_dispatch, hour=8, minute=0),
+        cron(scheduled_checkout_dispatch, hour=8,  minute=0),
+        # Dispute prevention: pre-arrival reminders (3 days before check-in)
+        cron(pre_arrival_reminders,       hour=9,  minute=0),
+        # Dispute prevention: charge day notice + auto-capture (check-in morning)
+        cron(charge_day_notices,          hour=7,  minute=0),
         # TravelOS: expire stale holds every 5 minutes
         cron(expire_stale_holds,          minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
     ]

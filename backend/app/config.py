@@ -15,7 +15,14 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str
-    anthropic_model:   str = "claude-3-5-sonnet-20241022"
+    anthropic_model:   str = "claude-opus-4-6"
+
+    # Voyage AI (async embeddings — replaces sentence-transformers in Stage 5)
+    # Get free API key at https://dash.voyageai.com
+    # Set VOYAGE_API_KEY= in .env to enable. Falls back to sentence-transformers if unset.
+    voyage_api_key:    str = ""
+    voyage_model:      str = "voyage-3"
+    voyage_dimensions: int = 1024
 
     # Database
     database_url: str = "postgresql://vayancy:vayancy@postgres:5432/agentic_brain"
@@ -36,6 +43,7 @@ class Settings(BaseSettings):
     whatsapp_access_token:         str = ""
     whatsapp_phone_number_id:      str = ""
     whatsapp_webhook_verify_token: str = ""
+    whatsapp_app_secret:           str = ""   # Meta App Secret for X-Hub-Signature-256 HMAC
     whatsapp_api_base:             str = "https://graph.facebook.com/v20.0"
     owner_whatsapp_phone:          str = ""
 
@@ -52,6 +60,18 @@ class Settings(BaseSettings):
 
     # TravelOS
     travelos_commission_pct: float = 5.0
+    travelos_success_url:    str = "https://owners.vayancy.gr/booking/success"
+    travelos_cancel_url:     str = "https://owners.vayancy.gr/booking/cancel"
+
+    # Email (Postmark — transactional confirmation + policy receipts)
+    postmark_api_key:    str = ""   # Server API token from postmarkapp.com
+    email_from_address:  str = "bookings@vayancy.gr"
+    email_from_name:     str = "Vayancy Bookings"
+    email_reply_to:      str = "support@vayancy.gr"
+
+    # Stripe (exception payment flow — tenants with payment_required=True)
+    stripe_secret_key:      str = ""   # sk_live_... or sk_test_...
+    stripe_webhook_secret:  str = ""   # whsec_... from Stripe dashboard
 
 
 @lru_cache

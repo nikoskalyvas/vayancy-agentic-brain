@@ -71,6 +71,19 @@ services:
       - "3004:3004"
     command: python -m app.mcp.epsilonnet
 
+  mcp-hospitality:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_HOSPITALITY_PORT: "3005"
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m app.mcp.hospitality
+
   # ── Core API ─────────────────────────────────────────────────────────────────
 
   api:

@@ -58,6 +58,11 @@ async def _request(method: str, path: str, **kwargs) -> dict:
     raise RuntimeError(f"Epsilon Net: max retries exceeded for {path}")
 
 
+# Stage 4 completion: amount floor + ceiling + per-reservation dedup
+_FOLIO_MIN_EUR = 1.0       # below €1 net is clearly bad data
+_FOLIO_MAX_EUR = 50_000.0  # above €50k/stay is clearly bad data
+
+
 @mcp.tool()
 async def create_folio(
     reservation_id: str,
@@ -75,7 +80,54 @@ async def create_folio(
     total_amount: net amount (pre-VAT) in EUR.
     VAT 13% applied automatically.
     This is a legally required operation — every failure is logged.
+
+    Stage 4 compliance fixes:
+      - Amount validation: rejects ≤0, negative, or implausible values
+      - Idempotency: duplicate call for same reservation_id returns cached result
     """
+    # ── Amount validation (compliance risk if skipped) ────────────────────────
+    if total_amount is None or total_amount <= 0:
+        err = f"Invalid total_amount={total_amount}: must be positive. Folio blocked."
+        log.error("folio_amount_invalid", reservation_id=reservation_id,
+                  total_amount=total_amount, reason="non_positive")
+        return json.dumps({"error": err, "reservation_id": reservation_id,
+                           "status": "validation_failed"})
+
+    if total_amount < _FOLIO_MIN_EUR:
+        err = (f"total_amount={total_amount} is below minimum €{_FOLIO_MIN_EUR}. "
+               f"Likely a data error. Folio blocked.")
+        log.error("folio_amount_too_low", reservation_id=reservation_id,
+                  total_amount=total_amount, min=_FOLIO_MIN_EUR)
+        return json.dumps({"error": err, "reservation_id": reservation_id,
+                           "status": "validation_failed"})
+
+    if total_amount > _FOLIO_MAX_EUR:
+        err = (f"total_amount={total_amount} exceeds ceiling €{_FOLIO_MAX_EUR}. "
+               f"Requires manual review. Folio blocked.")
+        log.error("folio_amount_too_high", reservation_id=reservation_id,
+                  total_amount=total_amount, max=_FOLIO_MAX_EUR)
+        return json.dumps({"error": err, "reservation_id": reservation_id,
+                           "status": "validation_failed"})
+
+    # ── Idempotency: check if folio already exists for this reservation ────────
+    # Prevents duplicate Greek tax documents on agent retry.
+    try:
+        existing = await _request("GET", "/folios",
+                                  params={"reference": reservation_id, "limit": 1})
+        existing_list = existing if isinstance(existing, list) else existing.get("data", [])
+        if existing_list:
+            cached = existing_list[0]
+            log.info("folio_idempotent_return", reservation_id=reservation_id,
+                     folio_id=cached.get("id"))
+            return json.dumps({
+                "folio_id":    cached.get("id"),
+                "status":      "already_exists",
+                "message":     "Folio already exists for this reservation. Returning cached.",
+                "gross_amount": cached.get("gross_amount"),
+            })
+    except Exception:
+        pass  # If check fails, proceed — better to attempt than to silently skip
+
     vat   = round(total_amount * VAT_RATES["accommodation"], 2)
     gross = round(total_amount + vat, 2)
 

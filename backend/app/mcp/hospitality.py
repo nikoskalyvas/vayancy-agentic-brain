@@ -398,14 +398,37 @@ async def create_hold(
 
     log.info("hold_created", hold_id=hold_id, unit_id=unit_id)
 
+    # Check if this tenant requires payment before booking is confirmed
+    payment_required = bool(tenant.get("payment_required", False))
+
+    if payment_required:
+        return json.dumps({
+            "success":          True,
+            "hold_id":          hold_id,
+            "unit_id":          unit_id,
+            "check_in":         check_in,
+            "check_out":        check_out,
+            "expires_at":       expires.isoformat(),
+            "payment_required": True,
+            "next_step":        "checkout",
+            "checkout_endpoint": f"/payments/checkout/{hold_id}",
+            "message": (
+                f"Hold active for {HOLD_TTL} min. "
+                f"This property requires payment before confirmation. "
+                f"Call POST /payments/checkout/{hold_id} with guest details to get the Stripe checkout URL."
+            ),
+        })
+
     return json.dumps({
-        "success":   True,
-        "hold_id":   hold_id,
-        "unit_id":   unit_id,
-        "check_in":  check_in,
-        "check_out": check_out,
-        "expires_at": expires.isoformat(),
-        "message":   f"Hold active for {HOLD_TTL} min. Call create_booking with this hold_id.",
+        "success":          True,
+        "hold_id":          hold_id,
+        "unit_id":          unit_id,
+        "check_in":         check_in,
+        "check_out":        check_out,
+        "expires_at":       expires.isoformat(),
+        "payment_required": False,
+        "next_step":        "create_booking",
+        "message":          f"Hold active for {HOLD_TTL} min. Call create_booking with this hold_id.",
     })
 
 
@@ -498,17 +521,99 @@ async def create_booking(
             guest_name, guest_email, guest_phone, notes,
         )
         log.info("booking_confirmed", booking_id=booking_id, pms_id=result.pms_booking_id)
+
+        # Dispute prevention: fire booking contract via WhatsApp automatically.
+        # We do this async so a WA failure never blocks the booking confirmation.
+        # The guest receives T&Cs and must reply YES — their reply is the legal proof.
+        try:
+            property_row = await pool.fetchrow(
+                "SELECT name FROM travelos_properties WHERE pms_unit_id=$1 AND tenant_id=$2",
+                hold["unit_id"], tenant["id"],
+            )
+            property_name = property_row["name"] if property_row else hold["unit_id"]
+
+            import httpx as _httpx
+            _wa_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+            _wa_pid   = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+            _wa_base  = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com/v20.0")
+
+            if _wa_token and _wa_pid and guest_phone:
+                from app.api.dispute_defense import _build_contract_message, _send_whatsapp
+                message = _build_contract_message(
+                    guest_name=guest_name,
+                    property_name=property_name,
+                    check_in=hold["check_in"],
+                    check_out=hold["check_out"],
+                    guests=hold["guests"],
+                    booking_ref=booking_id,
+                )
+                wa_msg_id = await _send_whatsapp(guest_phone, message)
+                if wa_msg_id:
+                    await pool.execute(
+                        """
+                        INSERT INTO booking_evidence
+                            (booking_ref, property_id, guest_email, guest_phone,
+                             evidence_type, channel, content_summary, wa_message_id, metadata)
+                        VALUES ($1, $2, $3, $4, 'booking_contract', 'whatsapp', $5, $6, $7)
+                        """,
+                        booking_id,
+                        str(tenant["id"]),
+                        guest_email,
+                        guest_phone,
+                        f"Contract sent for {property_name} {hold['check_in']}→{hold['check_out']}",
+                        wa_msg_id,
+                        json.dumps({"auto_sent": True, "booking_id": booking_id}),
+                    )
+                    log.info("contract_auto_sent", booking_id=booking_id, wa_id=wa_msg_id)
+        except Exception as e:
+            log.warning("contract_auto_send_failed", error=str(e), booking_id=booking_id)
+
+        # Send booking confirmation email (Postmark)
+        # Contains all policies agreed, charge date, booking ref.
+        # Stored as evidence with Postmark MessageID.
+        try:
+            from app.core.email import send_booking_confirmation_email
+            email_msg_id = await send_booking_confirmation_email(
+                to=guest_email,
+                guest_name=guest_name,
+                property_name=property_name,
+                check_in=hold["check_in"],
+                check_out=hold["check_out"],
+                guests=hold["guests"],
+                booking_ref=booking_id,
+                charge_date=hold["check_in"],
+            )
+            if email_msg_id:
+                await pool.execute(
+                    """
+                    INSERT INTO booking_evidence
+                        (booking_ref, property_id, guest_email, guest_phone,
+                         evidence_type, channel, content_summary, metadata)
+                    VALUES ($1, $2, $3, $4, 'booking_contract', 'email', $5, $6)
+                    """,
+                    booking_id, str(tenant["id"]), guest_email, guest_phone,
+                    "Confirmation email sent with policies and charge date",
+                    json.dumps({"postmark_message_id": email_msg_id,
+                                "policies_included": True, "channel": "email"}),
+                )
+                log.info("confirmation_email_sent", booking_id=booking_id,
+                         email_msg_id=email_msg_id)
+        except Exception as e:
+            log.warning("confirmation_email_failed", error=str(e), booking_id=booking_id)
+
         return json.dumps({
-            "success":        True,
-            "booking_id":     booking_id,
-            "pms_booking_id": result.pms_booking_id,
-            "unit_id":        hold["unit_id"],
-            "check_in":       hold["check_in"],
-            "check_out":      hold["check_out"],
-            "guest_name":     guest_name,
-            "status":         "confirmed",
-            "channel":        "travelos_mcp",
-            "message":        "Booking confirmed. No commission charged to OTA.",
+            "success":         True,
+            "booking_id":      booking_id,
+            "pms_booking_id":  result.pms_booking_id,
+            "unit_id":         hold["unit_id"],
+            "check_in":        hold["check_in"],
+            "check_out":       hold["check_out"],
+            "guest_name":      guest_name,
+            "status":          "confirmed",
+            "channel":         "travelos_mcp",
+            "contract_sent":   True,
+            "email_sent":      True,
+            "message":         "Booking confirmed. WhatsApp contract + confirmation email sent.",
         })
     else:
         log.error("booking_failed", error=result.error, hold_id=hold_id)

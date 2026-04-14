@@ -59,11 +59,17 @@ async def _resolve_tenant_key(request: Request) -> dict:
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class RegisterTenantRequest(BaseModel):
-    name:           str           # "Villa Azure - Nikos Papadopoulos"
-    pms_type:       str = "webhotelier"
-    pms_api_key:    str
-    pms_property_id: str
-    pms_api_base:   str = "https://api.webhotelier.net/v2"
+    name:              str            # "Villa Azure - Nikos Papadopoulos"
+    pms_type:          str = "webhotelier"
+    pms_api_key:       str
+    pms_property_id:   str
+    pms_api_base:      str = "https://api.webhotelier.net/v2"
+    # Payment model
+    # payment_required=False → default flow: AI books directly, owner invoiced monthly
+    # payment_required=True  → exception flow: Stripe checkout between hold and booking
+    payment_required:  bool = False
+    stripe_account_id: str | None = None   # owner's Stripe Connect account ID
+    commission_pct:    float = 5.0         # override global default per owner
 
 
 class RegisterPropertyRequest(BaseModel):
@@ -118,25 +124,31 @@ async def register_tenant(body: RegisterTenantRequest, request: Request) -> dict
         row = await pool.fetchrow(
             """
             INSERT INTO travelos_tenants
-                (name, api_key, property_ids, pms_type, pms_config, active)
-            VALUES ($1, $2, $3, $4, $5, TRUE)
+                (name, api_key, pms_type, pms_config, active,
+                 payment_required, stripe_account_id, commission_pct)
+            VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7)
             RETURNING id, name, created_at
             """,
             body.name,
             api_key,
-            [body.pms_property_id],
             body.pms_type,
             json.dumps(pms_config),
+            body.payment_required,
+            body.stripe_account_id,
+            body.commission_pct,
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail="Tenant already exists")
 
     return {
-        "tenant_id":  str(row["id"]),
-        "name":       row["name"],
-        "api_key":    api_key,   # only returned once — owner must save this
-        "created_at": row["created_at"].isoformat(),
-        "message":    "Tenant registered. Store the api_key — it will not be shown again.",
+        "tenant_id":        str(row["id"]),
+        "name":             row["name"],
+        "api_key":          api_key,
+        "payment_required": body.payment_required,
+        "commission_pct":   body.commission_pct,
+        "payment_mode":     "stripe_checkout" if body.payment_required else "invoice_monthly",
+        "created_at":       row["created_at"].isoformat(),
+        "message":          "Tenant registered. Store the api_key — it will not be shown again.",
     }
 
 

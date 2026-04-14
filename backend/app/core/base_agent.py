@@ -9,6 +9,7 @@ Fix 9:  Upsell SQL replaced with memory.record_upsell() — single code path.
 Fix 11: db_pool and memory injected as parameters instead of re-calling get_pool().
 """
 from __future__ import annotations
+import hashlib
 import json
 import re
 import time
@@ -24,16 +25,115 @@ from app.core.mcp_client import MultiMCPClient
 
 log = structlog.get_logger()
 
-MAX_ITERATIONS = 12
+MAX_ITERATIONS       = 12
+AGENT_TIMEOUT_SECONDS = 60  # Fix #5: wall-clock limit per agent run
 
 # Fix 8: simplified — no phone group, just the preference
-_PROFILE_RE  = re.compile(r"PROFILE_UPDATE:\s*(.+)", re.IGNORECASE)
-_ESCALATE_RE = re.compile(r"ESCALATE:\s*(.+)",       re.IGNORECASE)
-_UPSELL_RE   = re.compile(r"UPSELL_SENT:\s*(.+)",    re.IGNORECASE)
+_PROFILE_RE  = re.compile(r"PROFILE_UPDATE:\s*(.+)",  re.IGNORECASE)
+_ESCALATE_RE = re.compile(r"ESCALATE:\s*(.+)",        re.IGNORECASE)
+_UPSELL_RE   = re.compile(r"UPSELL_SENT:\s*(.+)",     re.IGNORECASE)
+_HITL_RE     = re.compile(r"HITL_REQUIRED:\s*(.+)",   re.IGNORECASE)
 
 # Per-property pg_notify channel — Fix 2/3: SSE isolation
 def _notify_channel(property_id: str) -> str:
     return f"workflow_updates_{property_id}"
+
+
+# Tools whose calls must be deduplicated within a workflow run.
+# Read-only tools (get_*, list_*, calculate_*) are intentionally excluded —
+# dedup only matters for write operations that cause side effects.
+_WRITE_TOOLS = {
+    "create_folio",
+    "issue_invoice",
+    "push_rate_overrides",
+    "update_base_price",
+    "set_min_stay",
+    "update_reservation",
+    "send_text_message",
+    "send_template_message",
+}
+
+
+def _tool_call_key(tool_name: str, tool_input: dict) -> str:
+    """
+    Deterministic hash key for a tool + arguments pair.
+    Used to detect duplicate tool calls within the same workflow run.
+    Sorted JSON ensures argument order doesn't create false misses.
+    """
+    payload = json.dumps({"t": tool_name, "i": tool_input}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+async def fetch_extension_context(
+    db_pool: "asyncpg.Pool",
+    property_id: str,
+) -> str:
+    """
+    Stage 4: Extension → Brain loop.
+
+    Fetch the latest Booking.com metrics captured by the Chrome Extension
+    and format them as a compact context string for the revenue agent.
+
+    Returns empty string if no extension data exists yet (extension not
+    installed or never synced) — agent runs normally without it.
+    """
+    try:
+        rows = await db_pool.fetch(
+            """
+            SELECT category, data, updated_at
+            FROM   extension_property_metrics
+            WHERE  property_id = $1
+            ORDER  BY category
+            """,
+            property_id,
+        )
+        if not rows:
+            return ""
+
+        import json as _json
+        sections = ["## Live Booking.com data (from Chrome Extension)"]
+        for row in rows:
+            cat  = row["category"]
+            data = _json.loads(row["data"]) if isinstance(row["data"], str) else dict(row["data"])
+            updated = row["updated_at"].strftime("%Y-%m-%d %H:%M") if row["updated_at"] else "unknown"
+
+            if cat == "analytics":
+                adr = data.get("adr")
+                occ = data.get("occupancy_rate")
+                sections.append(
+                    f"Analytics (as of {updated}): "
+                    f"ADR={f'€{adr:.0f}' if adr else 'N/A'}, "
+                    f"Occupancy={f'{occ*100:.1f}%' if occ else 'N/A'}"
+                )
+            elif cat == "ranking":
+                pos   = data.get("rank_position")
+                total = data.get("rank_total")
+                ctr   = data.get("ctr_30d")
+                score = data.get("page_score")
+                sections.append(
+                    f"BDC Ranking (as of {updated}): "
+                    f"Position={f'{pos}/{total}' if pos else 'N/A'}, "
+                    f"CTR={f'{ctr*100:.2f}%' if ctr else 'N/A'}, "
+                    f"Page Score={score or 'N/A'}"
+                )
+            elif cat == "promotions":
+                active = [k for k, v in data.items() if isinstance(v, dict) and v.get("active")]
+                if active:
+                    sections.append(
+                        f"Active BDC Promotions: {', '.join(active)}"
+                    )
+            elif cat == "visibility":
+                if data.get("booster_active"):
+                    sections.append(
+                        f"Visibility Booster: ACTIVE at {data.get('booster_percentage', '?')}%"
+                    )
+
+        return "\n".join(sections) if len(sections) > 1 else ""
+
+    except Exception as e:
+        import structlog as _sl
+        _sl.get_logger().warning("extension_context_fetch_failed", error=str(e))
+        return ""
 
 
 class BaseAgent(ABC):
@@ -56,6 +156,7 @@ class BaseAgent(ABC):
         db_pool:      asyncpg.Pool,        # Fix 11: threaded in, not re-fetched
         memory:       Any,                 # AgentMemory — Any to avoid circular
         guest_phone:  str | None = None,
+        skip_hitl:    bool = False,        # Fix #3: set True on HITL re-enqueue
     ) -> dict[str, Any]:
         from app.core.escalation import notify_owner
 
@@ -98,8 +199,35 @@ class BaseAgent(ABC):
             tool_calls_log: list = []
             success:        bool = True
             error_msg:      str | None = None
+            # Stage 4: tool-call dedup — maps hash → cached result string
+            # Prevents duplicate write operations (create_folio, push_rate_overrides etc.)
+            # if the LLM retries the same call due to a transient timeout.
+            _fired_calls: dict[str, str] = {}
 
             for _ in range(MAX_ITERATIONS):
+                # Fix #5: wall-clock timeout — checked at the start of every
+                # iteration. If an MCP server hangs mid-call and the LLM keeps
+                # retrying, this ensures we return a partial result and mark
+                # the job failed rather than spinning until ARQ's 300s limit
+                # kills the process ungracefully.
+                elapsed = time.monotonic() - start
+                if elapsed > AGENT_TIMEOUT_SECONDS:
+                    success   = False
+                    error_msg = (
+                        f"Agent timeout after {elapsed:.1f}s "
+                        f"({len(tool_calls_log)} tool calls completed). "
+                        f"Returning partial result."
+                    )
+                    log.warning(
+                        "agent_timeout",
+                        agent=self.name,
+                        elapsed_s=round(elapsed, 1),
+                        timeout_s=AGENT_TIMEOUT_SECONDS,
+                        tool_calls_completed=len(tool_calls_log),
+                        workflow_id=workflow_id,
+                    )
+                    break
+
                 try:
                     response = await client.messages.create(
                         model=settings.anthropic_model,
@@ -130,7 +258,27 @@ class BaseAgent(ABC):
                         if block.type != "tool_use":
                             continue
 
-                        result_text = await mcp.call_tool(block.name, block.input)
+                        # Stage 4: tool call dedup
+                        # For write-side tools, check if we already fired this
+                        # exact call in this workflow run. If yes, return the
+                        # cached result — prevents duplicate tax folios,
+                        # duplicate WhatsApp messages, and double rate pushes
+                        # when the LLM retries after a transient timeout.
+                        _call_key = _tool_call_key(block.name, block.input)
+                        if block.name in _WRITE_TOOLS and _call_key in _fired_calls:
+                            result_text = _fired_calls[_call_key]
+                            log.warning(
+                                "tool_call_deduplicated",
+                                tool=block.name,
+                                key=_call_key,
+                                agent=self.name,
+                                workflow_id=workflow_id,
+                            )
+                        else:
+                            result_text = await mcp.call_tool(block.name, block.input)
+                            if block.name in _WRITE_TOOLS:
+                                _fired_calls[_call_key] = result_text
+
                         tool_calls_log.append({
                             "tool":   block.name,
                             "input":  block.input,
@@ -203,6 +351,45 @@ class BaseAgent(ABC):
                 upsell_type = match.group(1).strip()
                 await memory.record_upsell(guest_phone, property_id, upsell_type)
                 log.info("upsell_recorded", type=upsell_type, phone=guest_phone)
+
+        # Stage 4: HITL — revenue decisions requiring owner approval
+        # Intercept HITL_REQUIRED directive before executing any high-impact action.
+        # The proposed action is stored in hitl_decisions as 'pending'.
+        # It will be re-enqueued by POST /hitl/{id}/approve when owner approves.
+        # Fix #3: skip_hitl=True is set when re-enqueueing an approved decision.
+        # Without this guard, the revenue agent re-evaluates the same action,
+        # hits the threshold again, and emits HITL_REQUIRED — infinite loop.
+        if final_text and self.name == "revenue" and not skip_hitl:
+            hitl_match = _HITL_RE.search(final_text)
+            if hitl_match:
+                import json as _json
+                hitl_raw = hitl_match.group(1).strip()
+                try:
+                    hitl_data = _json.loads(hitl_raw)
+                except Exception:
+                    hitl_data = {"raw": hitl_raw}
+
+                await db_pool.execute(
+                    """
+                    INSERT INTO hitl_decisions
+                        (property_id, workflow_id, agent, action_type,
+                         proposed_action, impact_summary, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+                    """,
+                    property_id,
+                    workflow_id,
+                    self.name,
+                    hitl_data.get("action_type", "rate_change"),
+                    _json.dumps(hitl_data.get("proposed_action", hitl_data)),
+                    hitl_data.get("impact_summary", hitl_raw[:200]),
+                )
+                log.info(
+                    "hitl_decision_created",
+                    action_type=hitl_data.get("action_type"),
+                    impact=hitl_data.get("impact_summary", "")[:80],
+                    workflow_id=workflow_id,
+                    property_id=property_id,
+                )
 
         # Fix 4: use memory.log_escalation() + mark_escalation_notified()
         if final_text:
