@@ -18,7 +18,7 @@ import structlog
 
 from app.config import settings
 from app.core.memory import AgentMemory
-from app.core.security import aidefence_guard, hook
+from app.core.security import aidefence_guard
 from app.core.revenue_agent import RevenueAgent
 from app.core.guest_agent import GuestAgent
 from app.core.operations_agent import OperationsAgent
@@ -29,10 +29,7 @@ _WA_URL = "http://mcp-whatsapp:3002/sse"
 _PL_URL = "http://mcp-pricelabs:3003/sse"
 _EN_URL = "http://mcp-epsilonnet:3004/sse"
 
-# Direct imports — no HTTP self-loop, no external ports
-from app.mcp.whatsapp  import send_luxury_message as _send_whatsapp
-from app.mcp.pricelabs import adjust_pricing as _adjust_pricing
-from app.mcp.travel    import get_weather_forecast as _get_weather
+# Legacy stubs removed — agents use MCP servers directly via BaseAgent
 
 log      = structlog.get_logger()
 anthropic = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -62,7 +59,6 @@ Tone: Warm, sophisticated, concierge-level. Never robotic.
 """
 
 
-@hook("pre_supervisor")
 async def supervisor_node(state: AgentState, config: RunnableConfig) -> dict:
     global _memory
     db: asyncpg.Pool = config["configurable"]["db_pool"]

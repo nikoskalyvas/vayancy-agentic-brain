@@ -88,7 +88,7 @@ async def init_schema() -> None:
                 ON guests (property_id, phone);
         """)
 
-        await conn.execute("""
+        await conn.execute(f"""
             CREATE TABLE IF NOT EXISTS guest_interactions (
                 id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 property_id    TEXT NOT NULL DEFAULT 'default',

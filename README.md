@@ -18,7 +18,7 @@ WebHotelier webhook → API (FastAPI) → Redis queue → Worker
                                                             WA MCP
 ```
 
-**8 Docker services:**
+**10 Docker services:**
 
 | Service | Role | Port |
 |---|---|---|
@@ -28,8 +28,9 @@ WebHotelier webhook → API (FastAPI) → Redis queue → Worker
 | `mcp-whatsapp` | WhatsApp MCP server | 3002 |
 | `mcp-pricelabs` | PriceLabs MCP server | 3003 |
 | `mcp-epsilonnet` | Epsilon Net MCP server | 3004 |
+| `mcp-hospitality` | TravelOS AI booking MCP | 3005 |
 | `api` | FastAPI + webhook handlers | 8000 |
-| `worker` | ARQ worker + cron jobs | — |
+| `worker` | ARQ worker + 4 cron jobs | — |
 | `dashboard` | Next.js owner dashboard | 3000 |
 
 ---
