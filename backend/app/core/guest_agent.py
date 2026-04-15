@@ -80,7 +80,7 @@ Default (none of the above match) → In-villa welcome basket
 After any interaction where you learn something about a guest's preferences
 (dietary needs, favourite activities, past complaints, special occasions),
 end your internal reasoning with:
-PROFILE_UPDATE: <phone_number> | <one-sentence preference to store>
+PROFILE_UPDATE: <one-sentence preference to store>
 
 This will be processed by the system to update the guest's persistent profile.
 

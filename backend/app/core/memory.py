@@ -44,14 +44,12 @@ _USE_VOYAGE = bool(settings.voyage_api_key)
 EMBEDDING_DIM = settings.voyage_dimensions if _USE_VOYAGE else 384
 
 if not _USE_VOYAGE:
-    try:
-        from sentence_transformers import SentenceTransformer as _ST
-        _st_model = _ST("all-MiniLM-L6-v2")
-        log.info("embeddings_backend", backend="sentence-transformers", dim=384)
-    except ImportError:
-        _st_model = None
-        log.warning("sentence_transformers_not_installed",
-                    note="Set VOYAGE_API_KEY to enable embeddings")
+    # Lazy-load sentence-transformers only when Voyage AI is not configured.
+    # Avoids loading 90MB model on deployments that use Voyage AI.
+    from sentence_transformers import SentenceTransformer as _ST
+    _st_model = _ST("all-MiniLM-L6-v2")
+    log.info("embeddings_backend", backend="sentence-transformers",
+             dim=384, note="Set VOYAGE_API_KEY to switch to Voyage AI")
 else:
     _st_model = None
     log.info("embeddings_backend", backend="voyage-ai",

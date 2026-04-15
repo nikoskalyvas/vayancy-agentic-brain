@@ -368,7 +368,32 @@ async def init_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_evidence_property
                 ON booking_evidence (property_id, guest_email);
         """)
-        # ── Stage 5: Multi-property registry ─────────────────────────────────
+        # ── Owner users (self-service auth) ─────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS owner_users (
+                id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name                 TEXT NOT NULL,
+                email                TEXT NOT NULL UNIQUE,
+                password_hash        TEXT NOT NULL,
+                verified             BOOLEAN DEFAULT FALSE,
+                verify_token         TEXT,
+                tenant_id            UUID REFERENCES travelos_tenants(id),
+                onboarding_complete  BOOLEAN DEFAULT FALSE,
+                created_at           TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_owner_users_email
+                ON owner_users (email);
+            CREATE INDEX IF NOT EXISTS idx_owner_users_verify_token
+                ON owner_users (verify_token) WHERE verify_token IS NOT NULL;
+        """)
+
+        # Add owner_config to travelos_tenants if missing (stores WA token, HITL settings)
+        await conn.execute("""
+            ALTER TABLE travelos_tenants
+            ADD COLUMN IF NOT EXISTS owner_config JSONB DEFAULT '{}';
+        """)
+
+        # ── Stage 5: Multi-property registry ─────────────────────────────────────
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS registered_properties (
                 property_id     TEXT PRIMARY KEY,

@@ -9,7 +9,11 @@ from contextlib import asynccontextmanager
 
 import arq
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -23,6 +27,7 @@ from app.api.hitl        import router as hitl_router        # Stage 4
 from app.api.properties  import router as properties_router  # Stage 5
 from app.api.payments       import router as payments_router       # Stripe
 from app.api.dispute_defense import router as dispute_router        # Dispute prevention
+from app.api.auth import auth_router, owner_router                   # Owner self-service
 
 log = structlog.get_logger()
 
@@ -55,11 +60,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = _limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://owners.vayancy.gr", "http://localhost:3000"],
+    allow_origins=["https://owners.vayancy.gr", "http://localhost:3000", "http://localhost:3001"],
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Tenant-Key", "X-Hub-Signature-256", "X-WebHotelier-Signature"],
 )
 
 app.include_router(webhook_router)
@@ -70,6 +79,8 @@ app.include_router(hitl_router,       prefix="/hitl")        # Stage 4
 app.include_router(properties_router, prefix="/properties")  # Stage 5
 app.include_router(payments_router,   prefix="/payments")      # Stripe
 app.include_router(dispute_router,    prefix="/dispute")       # Dispute prevention
+app.include_router(auth_router,       prefix="/auth")           # Owner auth
+app.include_router(owner_router,      prefix="/owner")          # Owner dashboard
 
 # Route reference:
 #

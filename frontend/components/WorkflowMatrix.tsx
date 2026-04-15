@@ -176,9 +176,9 @@ export default function WorkflowMatrix({ propertyId }: Props) {
                       ) : (
                         <span>{formatAction(ev.action)}</span>
                       )}
-                      {ev.details?.reason != null && (
+                      {ev.details?.reason && (
                         <span className="ml-2 text-vayancy-dim">
-                          — {String(ev.details.reason as string).slice(0, 60)}
+                          — {String(ev.details.reason).slice(0, 60)}
                         </span>
                       )}
                     </td>

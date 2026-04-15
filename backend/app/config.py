@@ -4,6 +4,8 @@ Centralised settings — all env vars validated at startup.
 from __future__ import annotations
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from typing import Any
 
 
 class Settings(BaseSettings):
@@ -12,6 +14,19 @@ class Settings(BaseSettings):
     environment: str = "development"
     secret_key:  str = "change-me-min-32-chars-in-production"
     property_id: str = "default"
+
+    @field_validator("secret_key")
+    @classmethod
+    def _validate_secret_key(cls, v: str, info: Any) -> str:
+        env = info.data.get("environment", "development")
+        if env == "production" and v == "change-me-min-32-chars-in-production":
+            raise ValueError(
+                "SECRET_KEY must be set to a strong random value in production. "
+                "Run: python3 -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        if len(v) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters")
+        return v
 
     # Anthropic
     anthropic_api_key: str
