@@ -89,9 +89,6 @@ class Settings(BaseSettings):
     email_from_name:     str = "Vayancy Bookings"
     email_reply_to:      str = "support@vayancy.gr"
 
-    # Property enrichment
-    google_places_api_key: str = ""   # Google Places API key for property lookup
-
     # Stripe (exception payment flow — tenants with payment_required=True)
     stripe_secret_key:      str = ""   # sk_live_... or sk_test_...
     stripe_webhook_secret:  str = ""   # whsec_... from Stripe dashboard

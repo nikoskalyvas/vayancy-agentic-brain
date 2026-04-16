@@ -72,6 +72,20 @@ export interface PropertyEnrichment {
   confidence:  Record<string, string>;
 }
 
+export interface PropertyDraft {
+  name:        string | null;
+  location:    string | null;
+  address:     string | null;
+  max_guests:  number | null;
+  bedrooms:    number | null;
+  bathrooms:   number | null;
+  base_rate:   number | null;
+  amenities:   string[];
+  photos:      string[];
+  sources:     Record<string, string>;
+  completeness: number;
+}
+
 export interface DashboardData {
   stats: {
     confirmed_bookings:    number;
@@ -193,11 +207,20 @@ export const api = {
 
   onboardingEnrich: {
     fromWebsite: (website_url: string, wh_api_key?: string, wh_property_id?: string) =>
-      request<PropertyDraft>("/auth/onboarding/enrich", { method: "POST", body: { website_url, wh_api_key, wh_property_id } }),
+      request<PropertyDraft>("/auth/onboarding/enrich", {
+        method: "POST",
+        body: JSON.stringify({ website_url, wh_api_key, wh_property_id }),
+      }),
     fromBdc: (bdc_url: string) =>
-      request<PropertyDraft>("/auth/onboarding/enrich-bdc", { method: "POST", body: { bdc_url } }),
+      request<PropertyDraft>("/auth/onboarding/enrich-bdc", {
+        method: "POST",
+        body: JSON.stringify({ bdc_url }),
+      }),
     fromPhotos: (photos_b64: string[]) =>
-      request<PropertyDraft>("/auth/onboarding/enrich-photos", { method: "POST", body: { photos_b64 } }),
+      request<PropertyDraft>("/auth/onboarding/enrich-photos", {
+        method: "POST",
+        body: JSON.stringify({ photos_b64 }),
+      }),
   },
   enrich: {
     website: (url: string) =>

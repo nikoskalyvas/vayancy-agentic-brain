@@ -348,10 +348,7 @@ async def enrich_from_bdc(bdc_url: str) -> PropertyData:
         log.warning("bdc_fetch_failed", url=bdc_url, error=str(e))
         return data
 
-    # 1. JSON-LD (BDC uses Hotel schema)
-    website_data = await enrich_from_website.__wrapped__(html) if hasattr(enrich_from_website, '__wrapped__') else None
-
-    # Parse JSON-LD directly
+    # 1. JSON-LD (BDC uses Hotel schema) — parse directly from fetched HTML
     json_ld_matches = re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html, re.DOTALL | re.IGNORECASE
