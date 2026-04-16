@@ -5,527 +5,406 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
 
-const AMENITY_OPTIONS = [
-  "pool", "sea_view", "wifi", "ac", "bbq", "parking",
-  "gym", "beach_access", "garden", "concierge",
-];
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  function copy() {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-  return (
-    <button
-      onClick={copy}
-      className="text-xs text-vayancy-accent border border-vayancy-border px-2 py-1 rounded hover:bg-vayancy-surface transition-colors"
-    >
-      {copied ? "Copied!" : "Copy"}
-    </button>
-  );
+interface PropertyDraft {
+  name:        string;
+  location:    string;
+  max_guests:  number;
+  bedrooms:    number;
+  base_rate:   string;
+  amenities:   string[];
+  sources:     Record<string, string>;
+  completeness: number;
 }
 
-function CodeBlock({ children }: { children: string }) {
-  return (
-    <div className="flex items-center justify-between bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2 mt-1.5">
-      <code className="text-xs text-vayancy-green font-mono break-all">{children}</code>
-      <CopyButton text={children} />
-    </div>
-  );
+const AMENITY_OPTIONS = ["pool","sea_view","wifi","ac","bbq","parking","gym","beach_access","garden","concierge"];
+const AMENITY_LABELS: Record<string, string> = {
+  pool:"Pool", sea_view:"Sea view", wifi:"WiFi", ac:"AC", bbq:"BBQ",
+  parking:"Parking", gym:"Gym", beach_access:"Beach access", garden:"Garden", concierge:"Concierge",
+};
+
+function SrcBadge({ src }: { src?: string }) {
+  const map: Record<string,string> = { website:"website", google_places:"Google",
+    booking_com:"Booking.com", webhotelier:"WebHotelier", claude_vision:"photos" };
+  if (!src) return null;
+  return <span className="ml-1.5 text-xs text-vayancy-green bg-green-950 border border-green-900 px-1.5 py-0.5 rounded-full">{map[src]||src}</span>;
 }
 
-function StatusPill({ ok, testing }: { ok: boolean | null; testing: boolean }) {
-  if (testing) return (
-    <span className="text-xs text-vayancy-amber flex items-center gap-1.5">
-      <span className="w-3.5 h-3.5 border-2 border-vayancy-amber border-t-transparent rounded-full animate-spin inline-block" />
-      Testing…
-    </span>
-  );
-  if (ok === true)  return <span className="text-xs text-vayancy-green flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-vayancy-green inline-block" />Connected</span>;
-  if (ok === false) return <span className="text-xs text-red-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Failed</span>;
-  return null;
+function CopyBtn({ text }: { text: string }) {
+  const [ok, setOk] = useState(false);
+  return <button onClick={() => { navigator.clipboard.writeText(text); setOk(true); setTimeout(()=>setOk(false),1500); }}
+    className="text-xs text-vayancy-accent border border-vayancy-border px-2 py-1 rounded">{ok?"Copied!":"Copy"}</button>;
 }
+function Code({ children }: { children: string }) {
+  return <div className="flex items-center justify-between bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2 mt-1.5">
+    <code className="text-xs text-vayancy-green font-mono break-all flex-1 mr-2">{children}</code>
+    <CopyBtn text={children} />
+  </div>;
+}
+
+const empty = (): PropertyDraft => ({ name:"", location:"", max_guests:4, bedrooms:2, base_rate:"", amenities:[], sources:{}, completeness:0 });
 
 export default function OnboardingPage() {
   const { user, login, isLoading } = useAuth();
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState("");
 
-  // WebHotelier
   const [whKey,    setWhKey]    = useState("");
-  const [whPropId, setWhPropId] = useState("");
-  const [whOk,     setWhOk]     = useState<boolean | null>(null);
-  const [whTesting, setWhTesting] = useState(false);
-
-  // WhatsApp
+  const [whProp,   setWhProp]   = useState("");
+  const [whOk,     setWhOk]     = useState<boolean|null>(null);
+  const [whBusy,   setWhBusy]   = useState(false);
   const [waToken,  setWaToken]  = useState("");
   const [waPid,    setWaPid]    = useState("");
-  const [waOk,     setWaOk]     = useState<boolean | null>(null);
-  const [waTesting, setWaTesting] = useState(false);
+  const [waOk,     setWaOk]     = useState<boolean|null>(null);
+  const [waBusy,   setWaBusy]   = useState(false);
   const [waPhone,  setWaPhone]  = useState("");
 
-  // Property
-  const [propName,     setPropName]     = useState("");
-  const [propLocation, setPropLocation] = useState("");
-  const [maxGuests,    setMaxGuests]    = useState(4);
-  const [bedrooms,     setBedrooms]     = useState(2);
-  const [baseRate,     setBaseRate]     = useState("");
-  const [amenities,    setAmenities]    = useState<string[]>([]);
+  const [siteUrl,  setSiteUrl]  = useState("");
+  const [bdcUrl,   setBdcUrl]   = useState("");
+  const [hasBdc,   setHasBdc]   = useState<boolean|null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [draft,    setDraft]    = useState<PropertyDraft>(empty());
+
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
+  const [photos64,   setPhotos64]   = useState<string[]>([]);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [saving,     setSaving]     = useState(false);
+
+  const apiBase = typeof window !== "undefined" ? window.location.origin + "/api" : "https://owners.vayancy.gr/api";
+  const tok = () => localStorage.getItem("vayancy_token") || "";
 
   useEffect(() => {
     if (!isLoading && !user) router.replace("/login");
     if (!isLoading && user?.onboarding_complete) router.replace("/dashboard");
   }, [user, isLoading, router]);
 
-  async function testWebHotelier() {
-    if (!whKey || !whPropId) return;
-    setWhTesting(true); setWhOk(null); setError("");
-    try {
-      const res = await api.onboarding.testWebHotelier(whKey, whPropId);
-      setWhOk(res.success);
-      if (!res.success) setError(res.error || "Connection failed");
-    } catch (e) {
-      setWhOk(false);
-      setError(e instanceof Error ? e.message : "Test failed");
-    } finally {
-      setWhTesting(false);
-    }
+  async function post(path: string, body: unknown) {
+    const r = await fetch(`${apiBase}${path}`, {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "Authorization":`Bearer ${tok()}` },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.message || "Request failed");
+    return d;
   }
 
-  async function testWhatsApp() {
-    if (!waToken || !waPid) return;
-    setWaTesting(true); setWaOk(null); setError("");
-    try {
-      const res = await api.onboarding.testWhatsApp(waToken, waPid);
-      setWaOk(res.success);
-      if (res.success) setWaPhone(res.phone_number || "");
-      else setError(res.error || "Connection failed");
-    } catch (e) {
-      setWaOk(false);
-      setError(e instanceof Error ? e.message : "Test failed");
-    } finally {
-      setWaTesting(false);
-    }
+  async function testWH() {
+    setWhBusy(true); setWhOk(null); setErr("");
+    try { const r = await api.onboarding.testWebHotelier(whKey, whProp); setWhOk(r.success); if (!r.success) setErr(r.error||"Failed"); }
+    catch (e) { setWhOk(false); setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setWhBusy(false); }
   }
 
-  async function completeOnboarding() {
-    if (!propName || !propLocation) return;
-    setSubmitting(true); setError("");
+  async function testWA() {
+    setWaBusy(true); setWaOk(null); setErr("");
+    try { const r = await api.onboarding.testWhatsApp(waToken, waPid); setWaOk(r.success); if (r.success) setWaPhone(r.phone_number||""); else setErr(r.error||"Failed"); }
+    catch (e) { setWaOk(false); setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setWaBusy(false); }
+  }
+
+  async function enrich() {
+    if (!siteUrl) return;
+    setEnriching(true); setErr("");
     try {
-      const res = await api.onboarding.complete({
-        wh_api_key:        whKey,
-        wh_property_id:    whPropId,
-        wa_access_token:   waToken,
-        wa_phone_number_id: waPid,
-        property_name:     propName,
-        property_location: propLocation,
-        max_guests:        maxGuests,
-        bedrooms,
-        base_rate:         baseRate ? parseFloat(baseRate) : null,
-        amenities,
-      });
-      login(res.access_token);
+      const d = await post("/auth/onboarding/enrich", { website_url: siteUrl, wh_api_key: whKey||null, wh_property_id: whProp||null });
+      setDraft(p => ({ ...p,
+        name: d.name||p.name, location: d.location||p.location,
+        max_guests: d.max_guests||p.max_guests, bedrooms: d.bedrooms||p.bedrooms,
+        base_rate: d.base_rate ? String(d.base_rate) : p.base_rate,
+        amenities: d.amenities?.length ? d.amenities : p.amenities,
+        sources: { ...p.sources, ...(d.sources||{}) },
+        completeness: d.completeness||p.completeness,
+      }));
+    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setEnriching(false); }
+  }
+
+  async function enrichBdc() {
+    if (!bdcUrl) return;
+    setEnriching(true); setErr("");
+    try {
+      const d = await post("/auth/onboarding/enrich-bdc", { bdc_url: bdcUrl });
+      setDraft(p => ({ ...p,
+        name: d.name||p.name, location: d.location||p.location,
+        max_guests: d.max_guests||p.max_guests,
+        amenities: [...new Set([...p.amenities, ...(d.amenities||[])])],
+        sources: { ...p.sources, ...(d.sources||{}) },
+        completeness: Math.max(d.completeness||0, p.completeness),
+      }));
+    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setEnriching(false); }
+  }
+
+  async function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files||[]).slice(0,4);
+    setPhotoFiles(files);
+    const b64s: string[] = [];
+    for (const f of files) {
+      const b64 = await new Promise<string>(res => { const r2 = new FileReader(); r2.onload = () => res((r2.result as string).split(",")[1]); r2.readAsDataURL(f); });
+      b64s.push(b64);
+    }
+    setPhotos64(b64s);
+  }
+
+  async function analyzePhotos() {
+    setAnalyzing(true); setErr("");
+    try {
+      const d = await post("/auth/onboarding/enrich-photos", { photos_b64: photos64 });
+      setDraft(p => ({ ...p,
+        bedrooms: d.bedrooms||p.bedrooms, max_guests: d.max_guests||p.max_guests,
+        amenities: [...new Set([...p.amenities, ...(d.amenities||[])])],
+        sources: { ...p.sources, ...(d.sources||{}) },
+        completeness: Math.max(d.completeness||0, p.completeness),
+      }));
       setStep(4);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Setup failed");
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setAnalyzing(false); }
   }
 
-  const apiUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/webhook/webhotelier`
-    : "https://owners.vayancy.gr/api/webhook/webhotelier";
+  async function save() {
+    if (!draft.name || !draft.location) { setErr("Name and location required"); return; }
+    setSaving(true); setErr("");
+    try {
+      const r = await api.onboarding.complete({
+        wh_api_key: whKey, wh_property_id: whProp,
+        wa_access_token: waToken, wa_phone_number_id: waPid,
+        property_name: draft.name, property_location: draft.location,
+        max_guests: draft.max_guests||4, bedrooms: draft.bedrooms||1,
+        base_rate: draft.base_rate ? parseFloat(draft.base_rate) : null,
+        amenities: draft.amenities,
+      });
+      login(r.access_token);
+      setStep(5);
+    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setSaving(false); }
+  }
 
-  const waWebhookUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/webhook/whatsapp`
-    : "https://owners.vayancy.gr/api/webhook/whatsapp";
+  if (isLoading) return <div className="min-h-screen bg-vayancy-bg flex items-center justify-center"><div className="w-5 h-5 border-2 border-vayancy-accent border-t-transparent rounded-full animate-spin"/></div>;
 
-  if (isLoading) return (
-    <div className="min-h-screen bg-vayancy-bg flex items-center justify-center">
-      <div className="w-5 h-5 border-2 border-vayancy-accent border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-
-  // ── Step progress ─────────────────────────────────────────────────────────
-  const steps = [
-    { n: 1, label: "WebHotelier" },
-    { n: 2, label: "WhatsApp" },
-    { n: 3, label: "Your property" },
-    { n: 4, label: "Ready" },
-  ];
+  const stepLabels = ["Connections","Property","Photos","Confirm"];
 
   return (
     <div className="min-h-screen bg-vayancy-bg flex flex-col items-center justify-center px-4 py-10">
       <div className="w-full max-w-lg">
+        <div className="text-center mb-8"><p className="text-vayancy-accent font-semibold tracking-widest text-sm">VAYANCY</p></div>
 
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <p className="text-vayancy-accent font-semibold tracking-widest text-sm">VAYANCY</p>
-        </div>
-
-        {/* Progress steps */}
-        {step < 4 && (
-          <div className="flex items-center justify-center gap-0 mb-8">
-            {steps.slice(0, 3).map((s, i) => (
-              <div key={s.n} className="flex items-center">
+        {step < 5 && (
+          <div className="flex items-center justify-center mb-8 gap-1">
+            {stepLabels.map((label, i) => {
+              const n = (i+1) as Step;
+              return <div key={n} className="flex items-center">
                 <div className="flex flex-col items-center">
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium border transition-colors ${
-                    step > s.n
-                      ? "bg-vayancy-green border-vayancy-green text-vayancy-bg"
-                      : step === s.n
-                      ? "bg-vayancy-accent border-vayancy-accent text-vayancy-bg"
-                      : "bg-vayancy-surface border-vayancy-border text-vayancy-dim"
-                  }`}>
-                    {step > s.n ? (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                      </svg>
-                    ) : s.n}
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium border ${step>n?"bg-vayancy-green border-vayancy-green text-vayancy-bg":step===n?"bg-vayancy-accent border-vayancy-accent text-vayancy-bg":"bg-vayancy-surface border-vayancy-border text-vayancy-dim"}`}>
+                    {step > n ? "✓" : n}
                   </div>
-                  <span className={`text-xs mt-1 ${step === s.n ? "text-vayancy-text" : "text-vayancy-dim"}`}>
-                    {s.label}
-                  </span>
+                  <span className={`text-xs mt-1 ${step===n?"text-vayancy-text":"text-vayancy-dim"}`}>{label}</span>
                 </div>
-                {i < 2 && (
-                  <div className={`w-16 h-px mx-2 mb-4 ${step > s.n ? "bg-vayancy-green" : "bg-vayancy-border"}`} />
-                )}
-              </div>
-            ))}
+                {i < 3 && <div className={`w-10 h-px mx-1 mb-4 ${step>n?"bg-vayancy-green":"bg-vayancy-border"}`}/>}
+              </div>;
+            })}
           </div>
         )}
 
-        {/* Card */}
         <div className="bg-vayancy-surface border border-vayancy-border rounded-xl p-7">
+          {err && <div className="bg-red-950 border border-red-800 text-red-300 rounded-lg px-4 py-3 text-sm mb-5">{err}</div>}
 
-          {error && (
-            <div className="bg-red-950 border border-red-800 text-red-300 rounded-lg px-4 py-3 text-sm mb-5">
-              {error}
+          {step === 1 && <>
+            <h2 className="text-base font-medium text-vayancy-text mb-1">Connect your tools</h2>
+            <p className="text-sm text-vayancy-dim mb-5">PMS and WhatsApp. We collect property details automatically next.</p>
+
+            <p className="text-xs font-medium text-vayancy-text mb-2">WebHotelier</p>
+            <label className="block text-xs text-vayancy-dim mb-1.5">API key <span className="opacity-60">— WebHotelier → Settings → API Access</span></label>
+            <input type="password" value={whKey} onChange={e=>{setWhKey(e.target.value);setWhOk(null);}} placeholder="wh_live_..."
+              className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent mb-2"/>
+            <label className="block text-xs text-vayancy-dim mb-1.5">Property ID <span className="opacity-60">— in the URL when viewing your property</span></label>
+            <input type="text" value={whProp} onChange={e=>{setWhProp(e.target.value);setWhOk(null);}} placeholder="12345"
+              className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent mb-3"/>
+            <div className="flex items-center gap-3 mb-3">
+              <button onClick={testWH} disabled={!whKey||!whProp||whBusy} className="border border-vayancy-border text-vayancy-dim text-xs px-3 py-2 rounded-lg hover:border-vayancy-accent disabled:opacity-40">{whBusy?"Testing…":"Test connection"}</button>
+              {whOk===true && <span className="text-xs text-vayancy-green flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-vayancy-green"/>Connected</span>}
+              {whOk===false && <span className="text-xs text-red-400">Failed — check credentials</span>}
             </div>
-          )}
+            <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-3 mb-5">
+              <p className="text-xs text-vayancy-dim mb-1">Webhook URL to set in WebHotelier → Settings → Webhooks:</p>
+              <Code>{apiBase.replace("/api","")}/api/webhook/webhotelier</Code>
+            </div>
 
-          {/* ── Step 1: WebHotelier ─────────────────────────────────────────── */}
-          {step === 1 && (
-            <>
-              <h2 className="text-base font-medium text-vayancy-text mb-1">Connect WebHotelier</h2>
-              <p className="text-sm text-vayancy-dim mb-5">
-                This is how Vayancy reads your reservations and manages availability.
-              </p>
-
-              <div className="space-y-4 mb-5">
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">API Key</label>
-                  <input
-                    type="password"
-                    value={whKey}
-                    onChange={e => { setWhKey(e.target.value); setWhOk(null); }}
-                    placeholder="wh_live_..."
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                  <p className="text-xs text-vayancy-dim mt-1">
-                    Found in WebHotelier portal → Settings → API Access
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">Property ID</label>
-                  <input
-                    type="text"
-                    value={whPropId}
-                    onChange={e => { setWhPropId(e.target.value); setWhOk(null); }}
-                    placeholder="12345"
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                </div>
+            <div className="border-t border-vayancy-border pt-5 mb-5">
+              <p className="text-xs font-medium text-vayancy-text mb-2">WhatsApp Business</p>
+              <label className="block text-xs text-vayancy-dim mb-1.5">Access token <span className="opacity-60">— Meta Developer → App → WhatsApp → API Setup</span></label>
+              <input type="password" value={waToken} onChange={e=>{setWaToken(e.target.value);setWaOk(null);}} placeholder="EAAxxxx..."
+                className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent mb-2"/>
+              <label className="block text-xs text-vayancy-dim mb-1.5">Phone number ID</label>
+              <input type="text" value={waPid} onChange={e=>{setWaPid(e.target.value);setWaOk(null);}} placeholder="123456789012345"
+                className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent mb-3"/>
+              <div className="flex items-center gap-3 mb-3">
+                <button onClick={testWA} disabled={!waToken||!waPid||waBusy} className="border border-vayancy-border text-vayancy-dim text-xs px-3 py-2 rounded-lg hover:border-vayancy-accent disabled:opacity-40">{waBusy?"Testing…":"Test connection"}</button>
+                {waOk===true && <span className="text-xs text-vayancy-green flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-vayancy-green"/>{waPhone||"Connected"}</span>}
+                {waOk===false && <span className="text-xs text-red-400">Failed</span>}
               </div>
+              <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-3 space-y-2">
+                <p className="text-xs text-vayancy-dim">Meta → App → WhatsApp → Configuration:</p>
+                <div><p className="text-xs text-vayancy-dim mb-0.5">Webhook URL:</p><Code>{apiBase.replace("/api","")}/api/webhook/whatsapp</Code></div>
+                <div><p className="text-xs text-vayancy-dim mb-0.5">Verify token:</p><Code>vayancy-verify</Code></div>
+              </div>
+            </div>
 
-              <div className="flex items-center gap-3 mb-5">
-                <button
-                  onClick={testWebHotelier}
-                  disabled={!whKey || !whPropId || whTesting}
-                  className="border border-vayancy-border text-vayancy-dim text-sm px-4 py-2 rounded-lg hover:border-vayancy-accent hover:text-vayancy-accent disabled:opacity-40 transition-colors"
-                >
-                  Test connection
+            <button onClick={()=>{setErr("");setStep(2);}} disabled={!whOk||!waOk} className="w-full bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40">Continue →</button>
+            {(!whOk||!waOk)&&<p className="text-center text-xs text-vayancy-dim mt-2">Test both connections first</p>}
+          </>}
+
+          {step === 2 && <>
+            <h2 className="text-base font-medium text-vayancy-text mb-1">Your property</h2>
+            <p className="text-sm text-vayancy-dim mb-4">Paste your website URL and we fill everything automatically.</p>
+
+            {draft.completeness > 0 && (
+              <div className="mb-4">
+                <div className="flex justify-between mb-1"><span className="text-xs text-vayancy-dim">Auto-filled</span><span className="text-xs text-vayancy-text">{draft.completeness}%</span></div>
+                <div className="h-1 bg-vayancy-border rounded-full overflow-hidden"><div className="h-full bg-vayancy-accent rounded-full transition-all" style={{width:`${draft.completeness}%`}}/></div>
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-xs text-vayancy-dim mb-1.5">Website URL</label>
+              <div className="flex gap-2">
+                <input type="url" value={siteUrl} onChange={e=>setSiteUrl(e.target.value)} placeholder="https://villaazure.gr"
+                  className="flex-1 bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"/>
+                <button onClick={enrich} disabled={!siteUrl||enriching} className="bg-vayancy-accent text-vayancy-bg text-xs font-medium px-4 rounded-lg disabled:opacity-40 whitespace-nowrap">
+                  {enriching?"Fetching…":"Auto-fill"}
                 </button>
-                <StatusPill ok={whOk} testing={whTesting} />
               </div>
+              {draft.name && <p className="text-xs text-vayancy-green mt-1.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-vayancy-green"/>Found: {draft.name}{draft.location?` · ${draft.location}`:""}{draft.amenities.length>0?` · ${draft.amenities.length} amenities`:""}</p>}
+            </div>
 
-              {/* Webhook guide */}
-              <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-4 mb-5">
-                <p className="text-xs font-medium text-vayancy-text mb-2">
-                  Set this webhook URL in WebHotelier portal
-                </p>
-                <CodeBlock>{apiUrl}</CodeBlock>
-                <p className="text-xs text-vayancy-dim mt-2">
-                  Go to WebHotelier → Settings → Webhooks → Add webhook URL → paste above.
-                  This is how new bookings reach your AI agents instantly.
-                </p>
+            <div className="mb-4">
+              <p className="text-xs text-vayancy-dim mb-2">On Booking.com?</p>
+              <div className="flex gap-2 mb-2">
+                {[true,false].map(v=><button key={String(v)} onClick={()=>setHasBdc(v)} className={`flex-1 text-xs py-2 rounded-lg border transition-colors ${hasBdc===v?"bg-vayancy-accent text-vayancy-bg border-vayancy-accent":"border-vayancy-border text-vayancy-dim hover:border-vayancy-accent"}`}>{v?"Yes":"No"}</button>)}
               </div>
+              {hasBdc && <div className="flex gap-2">
+                <input type="url" value={bdcUrl} onChange={e=>setBdcUrl(e.target.value)} placeholder="https://www.booking.com/hotel/gr/..."
+                  className="flex-1 bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"/>
+                <button onClick={enrichBdc} disabled={!bdcUrl||enriching} className="bg-vayancy-surface border border-vayancy-border text-vayancy-dim text-xs px-3 rounded-lg hover:border-vayancy-accent disabled:opacity-40 whitespace-nowrap">{enriching?"…":"Fill gaps"}</button>
+              </div>}
+            </div>
 
-              <button
-                onClick={() => { setError(""); setStep(2); }}
-                disabled={!whOk}
-                className="w-full bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40 transition-opacity"
-              >
-                Continue →
+            <div className="flex gap-3">
+              <button onClick={()=>setStep(1)} className="flex-1 border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent">← Back</button>
+              <button onClick={()=>{setErr("");setStep(3);}} className="flex-1 bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5">{draft.completeness>60?"Looks good →":"Continue →"}</button>
+            </div>
+          </>}
+
+          {step === 3 && <>
+            <h2 className="text-base font-medium text-vayancy-text mb-1">Upload photos</h2>
+            <p className="text-sm text-vayancy-dim mb-2">AI analyses them to spot bedrooms, pool, sea views, and more.</p>
+            <p className="text-xs text-vayancy-dim mb-5">Optional — skip if you prefer to fill manually.</p>
+
+            {draft.completeness > 0 && (
+              <div className="mb-4">
+                <div className="flex justify-between mb-1"><span className="text-xs text-vayancy-dim">Auto-filled</span><span className="text-xs text-vayancy-text">{draft.completeness}%</span></div>
+                <div className="h-1 bg-vayancy-border rounded-full overflow-hidden"><div className="h-full bg-vayancy-accent rounded-full transition-all" style={{width:`${draft.completeness}%`}}/></div>
+              </div>
+            )}
+
+            <div className="border-2 border-dashed border-vayancy-border rounded-xl p-6 text-center mb-4">
+              <input type="file" accept="image/*" multiple onChange={handleFiles} id="photos" className="hidden"/>
+              <label htmlFor="photos" className="cursor-pointer">
+                <p className="text-sm text-vayancy-dim">Click to upload up to 4 photos</p>
+                <p className="text-xs text-vayancy-dim mt-1">JPG, PNG, WebP</p>
+              </label>
+            </div>
+            {photoFiles.length > 0 && <p className="text-xs text-vayancy-green mb-4 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-vayancy-green"/>{photoFiles.length} photo{photoFiles.length>1?"s":""} ready to analyse</p>}
+
+            <div className="flex gap-3">
+              <button onClick={()=>setStep(2)} className="flex-1 border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent">← Back</button>
+              {photos64.length > 0
+                ? <button onClick={analyzePhotos} disabled={analyzing} className="flex-1 bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40">{analyzing?"Analysing…":"Analyse →"}</button>
+                : <button onClick={()=>{setErr("");setStep(4);}} className="flex-1 bg-vayancy-surface border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent">Skip →</button>
+              }
+            </div>
+          </>}
+
+          {step === 4 && <>
+            <h2 className="text-base font-medium text-vayancy-text mb-1">Confirm your details</h2>
+            <p className="text-sm text-vayancy-dim mb-4">We filled these automatically. Fix anything wrong.</p>
+
+            {draft.completeness > 0 && (
+              <div className="mb-4">
+                <div className="flex justify-between mb-1"><span className="text-xs text-vayancy-dim">Auto-filled</span><span className="text-xs text-vayancy-text">{draft.completeness}%</span></div>
+                <div className="h-1 bg-vayancy-border rounded-full overflow-hidden"><div className="h-full bg-vayancy-accent rounded-full transition-all" style={{width:`${draft.completeness}%`}}/></div>
+              </div>
+            )}
+
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="block text-xs text-vayancy-dim mb-1">Name <SrcBadge src={draft.sources.name}/></label>
+                <input type="text" value={draft.name} onChange={e=>setDraft(p=>({...p,name:e.target.value}))}
+                  className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent"/>
+              </div>
+              <div>
+                <label className="block text-xs text-vayancy-dim mb-1">Location <SrcBadge src={draft.sources.location}/></label>
+                <input type="text" value={draft.location} onChange={e=>setDraft(p=>({...p,location:e.target.value}))} placeholder="Mykonos"
+                  className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent"/>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-xs text-vayancy-dim mb-1">Guests <SrcBadge src={draft.sources.max_guests}/></label>
+                  <select value={draft.max_guests} onChange={e=>setDraft(p=>({...p,max_guests:parseInt(e.target.value)}))}
+                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-2 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent">
+                    {[2,3,4,5,6,7,8,10,12].map(n=><option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-vayancy-dim mb-1">Beds <SrcBadge src={draft.sources.bedrooms}/></label>
+                  <select value={draft.bedrooms} onChange={e=>setDraft(p=>({...p,bedrooms:parseInt(e.target.value)}))}
+                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-2 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent">
+                    {[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-vayancy-dim mb-1">Rate €/night</label>
+                  <input type="number" value={draft.base_rate} onChange={e=>setDraft(p=>({...p,base_rate:e.target.value}))} placeholder="350"
+                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-2 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent"/>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-vayancy-dim mb-2">Amenities {draft.amenities.length>0&&<SrcBadge src={Object.values(draft.sources)[0]}/>}</label>
+                <div className="flex flex-wrap gap-2">
+                  {AMENITY_OPTIONS.map(a=>(
+                    <button key={a} type="button"
+                      onClick={()=>setDraft(p=>({...p,amenities:p.amenities.includes(a)?p.amenities.filter(x=>x!==a):[...p.amenities,a]}))}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${draft.amenities.includes(a)?"bg-vayancy-accent text-vayancy-bg border-vayancy-accent":"bg-vayancy-bg border-vayancy-border text-vayancy-dim hover:border-vayancy-accent"}`}>
+                      {AMENITY_LABELS[a]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={()=>setStep(3)} className="flex-1 border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent">← Back</button>
+              <button onClick={save} disabled={!draft.name||!draft.location||saving} className="flex-1 bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40">
+                {saving?"Setting up…":"Go live →"}
               </button>
-              {!whOk && (
-                <p className="text-center text-xs text-vayancy-dim mt-2">
-                  Test the connection before continuing
-                </p>
-              )}
-            </>
-          )}
+            </div>
+          </>}
 
-          {/* ── Step 2: WhatsApp ─────────────────────────────────────────────── */}
-          {step === 2 && (
-            <>
-              <h2 className="text-base font-medium text-vayancy-text mb-1">Connect WhatsApp Business</h2>
-              <p className="text-sm text-vayancy-dim mb-5">
-                Your AI guest agent sends and receives messages through your WhatsApp Business number.
-              </p>
-
-              <div className="space-y-4 mb-5">
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">Access Token</label>
-                  <input
-                    type="password"
-                    value={waToken}
-                    onChange={e => { setWaToken(e.target.value); setWaOk(null); }}
-                    placeholder="EAAxxxx..."
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                  <p className="text-xs text-vayancy-dim mt-1">
-                    Meta Developer Portal → Your App → WhatsApp → API Setup → Temporary access token
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">Phone Number ID</label>
-                  <input
-                    type="text"
-                    value={waPid}
-                    onChange={e => { setWaPid(e.target.value); setWaOk(null); }}
-                    placeholder="123456789012345"
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                  <p className="text-xs text-vayancy-dim mt-1">
-                    Same page → Phone Number ID (below the access token)
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 mb-5">
-                <button
-                  onClick={testWhatsApp}
-                  disabled={!waToken || !waPid || waTesting}
-                  className="border border-vayancy-border text-vayancy-dim text-sm px-4 py-2 rounded-lg hover:border-vayancy-accent hover:text-vayancy-accent disabled:opacity-40 transition-colors"
-                >
-                  Test connection
-                </button>
-                <StatusPill ok={waOk} testing={waTesting} />
-                {waOk && waPhone && (
-                  <span className="text-xs text-vayancy-green">{waPhone}</span>
-                )}
-              </div>
-
-              {/* Webhook guide */}
-              <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-4 mb-5">
-                <p className="text-xs font-medium text-vayancy-text mb-1">
-                  Configure webhook in Meta Developer Portal
-                </p>
-                <p className="text-xs text-vayancy-dim mb-2">
-                  App → WhatsApp → Configuration → Webhook URL:
-                </p>
-                <CodeBlock>{waWebhookUrl}</CodeBlock>
-                <p className="text-xs text-vayancy-dim mt-2 mb-1">Verify token:</p>
-                <CodeBlock>vayancy-verify</CodeBlock>
-                <p className="text-xs text-vayancy-dim mt-2">
-                  Subscribe to: <strong>messages</strong>
-                </p>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setStep(1)}
-                  className="flex-1 border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent hover:text-vayancy-accent transition-colors"
-                >
-                  ← Back
-                </button>
-                <button
-                  onClick={() => { setError(""); setStep(3); }}
-                  disabled={!waOk}
-                  className="flex-1 bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40 transition-opacity"
-                >
-                  Continue →
-                </button>
-              </div>
-              {!waOk && (
-                <p className="text-center text-xs text-vayancy-dim mt-2">
-                  Test the connection before continuing
-                </p>
-              )}
-            </>
-          )}
-
-          {/* ── Step 3: Property ─────────────────────────────────────────────── */}
-          {step === 3 && (
-            <>
-              <h2 className="text-base font-medium text-vayancy-text mb-1">Add your property</h2>
-              <p className="text-sm text-vayancy-dim mb-5">
-                This creates your listing in TravelOS — the AI booking catalog.
-              </p>
-
-              <div className="space-y-4 mb-5">
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">Property name</label>
-                  <input
-                    type="text"
-                    value={propName}
-                    onChange={e => setPropName(e.target.value)}
-                    placeholder="Villa Azure"
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">Location</label>
-                  <input
-                    type="text"
-                    value={propLocation}
-                    onChange={e => setPropLocation(e.target.value)}
-                    placeholder="Mykonos"
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-vayancy-dim mb-1.5">Max guests</label>
-                    <select
-                      value={maxGuests}
-                      onChange={e => setMaxGuests(parseInt(e.target.value))}
-                      className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent"
-                    >
-                      {[2,3,4,5,6,7,8,10,12].map(n => (
-                        <option key={n} value={n}>{n} guests</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-vayancy-dim mb-1.5">Bedrooms</label>
-                    <select
-                      value={bedrooms}
-                      onChange={e => setBedrooms(parseInt(e.target.value))}
-                      className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text focus:outline-none focus:border-vayancy-accent"
-                    >
-                      {[1,2,3,4,5,6].map(n => (
-                        <option key={n} value={n}>{n} bed{n > 1 ? "s" : ""}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-1.5">
-                    Base rate (€/night) — optional
-                  </label>
-                  <input
-                    type="number"
-                    value={baseRate}
-                    onChange={e => setBaseRate(e.target.value)}
-                    placeholder="300"
-                    min="0"
-                    className="w-full bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2.5 text-sm text-vayancy-text placeholder-vayancy-border focus:outline-none focus:border-vayancy-accent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs text-vayancy-dim mb-2">Amenities</label>
-                  <div className="flex flex-wrap gap-2">
-                    {AMENITY_OPTIONS.map(a => (
-                      <button
-                        key={a}
-                        type="button"
-                        onClick={() => setAmenities(prev =>
-                          prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]
-                        )}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                          amenities.includes(a)
-                            ? "bg-vayancy-accent text-vayancy-bg border-vayancy-accent"
-                            : "bg-vayancy-bg border-vayancy-border text-vayancy-dim hover:border-vayancy-accent hover:text-vayancy-accent"
-                        }`}
-                      >
-                        {a.replace("_", " ")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setStep(2)}
-                  className="flex-1 border border-vayancy-border text-vayancy-dim text-sm rounded-lg py-2.5 hover:border-vayancy-accent hover:text-vayancy-accent transition-colors"
-                >
-                  ← Back
-                </button>
-                <button
-                  onClick={completeOnboarding}
-                  disabled={!propName || !propLocation || submitting}
-                  className="flex-1 bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5 disabled:opacity-40 transition-opacity"
-                >
-                  {submitting ? "Setting up…" : "Go live →"}
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* ── Step 4: Success ───────────────────────────────────────────────── */}
-          {step === 4 && (
+          {step === 5 && (
             <div className="text-center py-4">
               <div className="w-16 h-16 bg-green-950 border border-green-800 rounded-full flex items-center justify-center mx-auto mb-5">
-                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                  <path d="M6 14l5.5 5.5L22 8" stroke="#4ade80" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M6 14l5.5 5.5L22 8" stroke="#4ade80" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <h2 className="text-xl font-medium text-vayancy-text mb-2">
-                Your villa is live.
-              </h2>
-              <p className="text-sm text-vayancy-dim mb-6 leading-relaxed">
-                Your AI agents are active. New bookings from WebHotelier will be handled automatically.
-                Guest messages are answered 24/7.
-              </p>
+              <h2 className="text-xl font-medium text-vayancy-text mb-2">Your villa is live.</h2>
+              <p className="text-sm text-vayancy-dim mb-6 leading-relaxed">Three AI agents are now active. Bookings are handled automatically.</p>
               <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-4 text-left mb-6 space-y-2">
-                <div className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-vayancy-green mt-1.5 flex-shrink-0" />
-                  <p className="text-xs text-vayancy-dim">Guest agent answering WhatsApp messages</p>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-vayancy-green mt-1.5 flex-shrink-0" />
-                  <p className="text-xs text-vayancy-dim">Revenue agent reviewing pricing every 4 hours</p>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-vayancy-green mt-1.5 flex-shrink-0" />
-                  <p className="text-xs text-vayancy-dim">Operations agent dispatching on every checkout</p>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-vayancy-amber mt-1.5 flex-shrink-0" />
-                  <p className="text-xs text-vayancy-dim">
-                    Rate changes above 25% will ask for your approval first
-                  </p>
-                </div>
+                {["Guest agent answering WhatsApp messages","Revenue agent reviewing pricing every 4 hours","Operations agent dispatching on every checkout"].map((item,i)=>(
+                  <div key={i} className="flex items-start gap-2"><span className="w-1.5 h-1.5 rounded-full bg-vayancy-green mt-1.5 flex-shrink-0"/><p className="text-xs text-vayancy-dim">{item}</p></div>
+                ))}
               </div>
-              <button
-                onClick={() => router.push("/dashboard")}
-                className="w-full bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5"
-              >
-                Open dashboard →
-              </button>
+              <button onClick={()=>router.push("/dashboard")} className="w-full bg-vayancy-accent text-vayancy-bg font-medium text-sm rounded-lg py-2.5">Open dashboard →</button>
             </div>
           )}
         </div>

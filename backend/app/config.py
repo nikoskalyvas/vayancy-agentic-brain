@@ -78,11 +78,19 @@ class Settings(BaseSettings):
     travelos_success_url:    str = "https://owners.vayancy.gr/booking/success"
     travelos_cancel_url:     str = "https://owners.vayancy.gr/booking/cancel"
 
+    # Google Places API (property enrichment during onboarding)
+    # Get key at https://console.cloud.google.com → Places API
+    # Free tier: 28,500 requests/month
+    google_places_api_key: str = ""
+
     # Email (Postmark — transactional confirmation + policy receipts)
     postmark_api_key:    str = ""   # Server API token from postmarkapp.com
     email_from_address:  str = "bookings@vayancy.gr"
     email_from_name:     str = "Vayancy Bookings"
     email_reply_to:      str = "support@vayancy.gr"
+
+    # Property enrichment
+    google_places_api_key: str = ""   # Google Places API key for property lookup
 
     # Stripe (exception payment flow — tenants with payment_required=True)
     stripe_secret_key:      str = ""   # sk_live_... or sk_test_...

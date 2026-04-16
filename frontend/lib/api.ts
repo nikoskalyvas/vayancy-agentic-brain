@@ -57,6 +57,21 @@ export interface AuthUser {
   onboarding_complete: boolean;
 }
 
+export interface PropertyEnrichment {
+  name:        string | null;
+  location:    string | null;
+  address:     string | null;
+  description: string | null;
+  max_guests:  number | null;
+  bedrooms:    number | null;
+  bathrooms:   number | null;
+  base_rate:   number | null;
+  amenities:   string[];
+  photos:      string[];
+  website:     string | null;
+  confidence:  Record<string, string>;
+}
+
 export interface DashboardData {
   stats: {
     confirmed_bookings:    number;
@@ -174,6 +189,37 @@ export const api = {
         "/auth/onboarding/complete",
         { method: "POST", body: JSON.stringify(data) }
       ),
+  },
+
+  onboardingEnrich: {
+    fromWebsite: (website_url: string, wh_api_key?: string, wh_property_id?: string) =>
+      request<PropertyDraft>("/auth/onboarding/enrich", { method: "POST", body: { website_url, wh_api_key, wh_property_id } }),
+    fromBdc: (bdc_url: string) =>
+      request<PropertyDraft>("/auth/onboarding/enrich-bdc", { method: "POST", body: { bdc_url } }),
+    fromPhotos: (photos_b64: string[]) =>
+      request<PropertyDraft>("/auth/onboarding/enrich-photos", { method: "POST", body: { photos_b64 } }),
+  },
+  enrich: {
+    website: (url: string) =>
+      request<PropertyEnrichment>("/enrich/website", {
+        method: "POST", body: JSON.stringify({ url }),
+      }),
+    google: (name: string, location: string) =>
+      request<PropertyEnrichment>("/enrich/google", {
+        method: "POST", body: JSON.stringify({ name, location }),
+      }),
+    bdc: (url: string) =>
+      request<PropertyEnrichment>("/enrich/bdc", {
+        method: "POST", body: JSON.stringify({ url }),
+      }),
+    webhotelier: (api_key: string, property_id: string) =>
+      request<PropertyEnrichment>("/enrich/webhotelier", {
+        method: "POST", body: JSON.stringify({ api_key, property_id }),
+      }),
+    photos: (images: string[]) =>
+      request<PropertyEnrichment>("/enrich/photos", {
+        method: "POST", body: JSON.stringify({ images }),
+      }),
   },
 
   owner: {

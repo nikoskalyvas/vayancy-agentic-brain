@@ -275,6 +275,21 @@ async def me(user: dict = Depends(get_current_user)) -> dict:
 
 # ── Onboarding ────────────────────────────────────────────────────────────────
 
+# ── Enrichment schemas ────────────────────────────────────────────────────────
+
+class EnrichFromWebsiteRequest(BaseModel):
+    website_url:    str
+    wh_api_key:     str | None = None
+    wh_property_id: str | None = None
+
+
+class EnrichFromBDCRequest(BaseModel):
+    bdc_url: str
+
+
+class EnrichFromPhotosRequest(BaseModel):
+    photos_b64: list[str]  # base64-encoded images, max 4
+
 @auth_router.post("/onboarding/test-webhotelier")
 async def test_webhotelier(
     body: TestWebHotelierRequest,
@@ -343,6 +358,61 @@ async def test_whatsapp(
         return {"success": False, "error": "Connection timed out"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@auth_router.post("/onboarding/enrich")
+async def enrich_property(
+    body: EnrichFromWebsiteRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Step 1 of property auto-population pipeline.
+    Given a website URL (+ optional WH credentials), runs:
+      website → schema.org + OG tags
+      Google Places → structured address + location
+      WebHotelier API → full property data (if credentials provided)
+
+    Returns pre-filled PropertyData with completeness score.
+    Frontend shows a confirmation screen — owner edits anything wrong.
+    """
+    from app.core.property_enrichment import run_enrichment_pipeline
+    result = await run_enrichment_pipeline(
+        website_url=body.website_url,
+        wh_api_key=body.wh_api_key,
+        wh_property_id=body.wh_property_id,
+    )
+    return result
+
+
+@auth_router.post("/onboarding/enrich-bdc")
+async def enrich_from_bdc(
+    body: EnrichFromBDCRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Step 2 — fill gaps from Booking.com public listing.
+    Called if the owner pastes their BDC listing URL.
+    Only fills fields still empty after the website scrape.
+    """
+    from app.core.property_enrichment import enrich_from_bdc as _bdc
+    data = await _bdc(body.bdc_url)
+    return data.to_dict()
+
+
+@auth_router.post("/onboarding/enrich-photos")
+async def enrich_from_photos(
+    body: EnrichFromPhotosRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Step 3 (optional) — Claude vision analyses uploaded photos.
+    Identifies bedrooms, bathrooms, amenities from visual inspection.
+    Returns amenity list and room counts to fill any remaining gaps.
+    Max 4 photos, base64 encoded.
+    """
+    from app.core.property_enrichment import enrich_from_photos as _vision
+    data = await _vision(body.photos_b64)
+    return data.to_dict()
 
 
 @auth_router.post("/onboarding/complete")
