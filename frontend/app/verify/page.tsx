@@ -78,3 +78,15 @@ function VerifyContent() {
     </div>
   );
 }
+
+export default function VerifyPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-vayancy-bg flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-vayancy-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <VerifyContent />
+    </Suspense>
+  );
+}
