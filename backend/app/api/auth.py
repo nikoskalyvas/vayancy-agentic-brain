@@ -145,7 +145,7 @@ async def _send_verify_email(email: str, name: str, token: str) -> None:
 
 @auth_router.post("/signup")
 @_limiter.limit("3/minute")
-async def signup(body: SignupRequest, request: Request) -> dict:
+async def signup(request: Request, body: SignupRequest) -> dict:
     """Create a new owner account. Sends verification email."""
     pool = await get_pool()
 
@@ -222,7 +222,7 @@ async def verify_email(token: str) -> dict:
 
 @auth_router.post("/login")
 @_limiter.limit("5/minute")
-async def login(body: LoginRequest, request: Request) -> dict:
+async def login(request: Request, body: LoginRequest) -> dict:
     """Login with email + password. Returns JWT."""
     pool = await get_pool()
     user = await pool.fetchrow(
