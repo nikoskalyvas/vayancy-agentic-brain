@@ -23,11 +23,14 @@ from app.core.revenue_agent import RevenueAgent
 from app.core.guest_agent import GuestAgent
 from app.core.operations_agent import OperationsAgent
 
-# MCP server URLs (separate Docker processes)
-_WH_URL = "http://mcp-webhotelier:3001/sse"
-_WA_URL = "http://mcp-whatsapp:3002/sse"
-_PL_URL = "http://mcp-pricelabs:3003/sse"
-_EN_URL = "http://mcp-epsilonnet:3004/sse"
+# MCP server URLs — configured via env vars for Railway deployment
+# Local Docker:  http://mcp-webhotelier:3001/sse
+# Railway:       https://mcp-webhotelier-xxx.railway.app/sse  (set in env)
+import os as _os
+_WH_URL = _os.getenv("MCP_WEBHOTELIER_URL", "http://mcp-webhotelier:3001/sse")
+_WA_URL = _os.getenv("MCP_WHATSAPP_URL",    "http://mcp-whatsapp:3002/sse")
+_PL_URL = _os.getenv("MCP_PRICELABS_URL",   "http://mcp-pricelabs:3003/sse")
+_EN_URL = _os.getenv("MCP_EPSILONNET_URL",  "http://mcp-epsilonnet:3004/sse")
 
 # Legacy stubs removed — agents use MCP servers directly via BaseAgent
 

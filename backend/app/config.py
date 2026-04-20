@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     travelos_success_url:    str = "https://owners.vayancy.gr/booking/success"
     travelos_cancel_url:     str = "https://owners.vayancy.gr/booking/cancel"
 
+    # MCP server URLs — override for Railway deployment
+    mcp_webhotelier_url: str = "http://mcp-webhotelier:3001/sse"
+    mcp_whatsapp_url:    str = "http://mcp-whatsapp:3002/sse"
+    mcp_pricelabs_url:   str = "http://mcp-pricelabs:3003/sse"
+    mcp_epsilonnet_url:  str = "http://mcp-epsilonnet:3004/sse"
+
     # Google Places API (property enrichment during onboarding)
     # Get key at https://console.cloud.google.com → Places API
     # Free tier: 28,500 requests/month
