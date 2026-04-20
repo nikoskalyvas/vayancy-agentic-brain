@@ -60,7 +60,7 @@ async def _resolve_tenant_key(request: Request) -> dict:
 
 class RegisterTenantRequest(BaseModel):
     name:              str            # "Villa Azure - Nikos Papadopoulos"
-    pms_type:          str = "webhotelier"
+    pms_type:          str = "webhotelier"  # webhotelier | hosthub
     pms_api_key:       str
     pms_property_id:   str
     pms_api_base:      str = "https://api.webhotelier.net/v2"
@@ -114,9 +114,12 @@ async def register_tenant(body: RegisterTenantRequest, request: Request) -> dict
     pool    = await get_pool()
     api_key = secrets.token_urlsafe(32)
 
+    # HostHub uses rental_id, WebHotelier uses property_id — store both
+    # so adapters can read whichever field they need
     pms_config = {
         "api_key":     body.pms_api_key,
-        "property_id": body.pms_property_id,
+        "property_id": body.pms_property_id,  # WebHotelier
+        "rental_id":   body.pms_property_id,  # HostHub (same value, different key name)
         "api_base":    body.pms_api_base,
     }
 

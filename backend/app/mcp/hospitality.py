@@ -90,6 +90,12 @@ def _build_adapter(tenant: dict) -> PMSAdapter:
             property_id=cfg["property_id"],
             api_base=cfg.get("api_base", "https://api.webhotelier.net/v2"),
         )
+    if tenant["pms_type"] == "hosthub":
+        from app.mcp.adapters.hosthub import HostHubAdapter
+        return HostHubAdapter(
+            api_key=cfg["api_key"],
+            rental_id=cfg["rental_id"],
+        )
     raise ValueError(f"Unsupported PMS: {tenant['pms_type']}")
 
 
