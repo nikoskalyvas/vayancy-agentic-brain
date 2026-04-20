@@ -36,7 +36,7 @@ function CopyBtn({ text }: { text: string }) {
   return <button onClick={() => { navigator.clipboard.writeText(text); setOk(true); setTimeout(()=>setOk(false),1500); }}
     className="text-xs text-vayancy-accent border border-vayancy-border px-2 py-1 rounded">{ok?"Copied!":"Copy"}</button>;
 }
-function Code({ children }: { children: React.ReactNode }) {
+function Code({ children }: { children: string }) {
   return <div className="flex items-center justify-between bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2 mt-1.5">
     <code className="text-xs text-vayancy-green font-mono break-all flex-1 mr-2">{children}</code>
     <CopyBtn text={children} />
@@ -229,7 +229,7 @@ export default function OnboardingPage() {
             </div>
             <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-3 mb-5">
               <p className="text-xs text-vayancy-dim mb-1">Webhook URL to set in WebHotelier → Settings → Webhooks:</p>
-              <Code>{apiBase.replace("/api","")}/api/webhook/webhotelier</Code>
+              <Code>{`${apiBase.replace("/api","")}/api/webhook/webhotelier`}</Code>
             </div>
 
             <div className="border-t border-vayancy-border pt-5 mb-5">
@@ -247,7 +247,7 @@ export default function OnboardingPage() {
               </div>
               <div className="bg-vayancy-bg border border-vayancy-border rounded-lg p-3 space-y-2">
                 <p className="text-xs text-vayancy-dim">Meta → App → WhatsApp → Configuration:</p>
-                <div><p className="text-xs text-vayancy-dim mb-0.5">Webhook URL:</p><Code>{apiBase.replace("/api","")}/api/webhook/whatsapp</Code></div>
+                <div><p className="text-xs text-vayancy-dim mb-0.5">Webhook URL:</p><Code>{`${apiBase.replace("/api","")}/api/webhook/whatsapp`}</Code></div>
                 <div><p className="text-xs text-vayancy-dim mb-0.5">Verify token:</p><Code>vayancy-verify</Code></div>
               </div>
             </div>
