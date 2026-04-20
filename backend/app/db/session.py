@@ -312,7 +312,7 @@ async def init_schema() -> None:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS stripe_payments (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                hold_id             TEXT NOT NULL REFERENCES travelos_holds(id),
+                hold_id             UUID NOT NULL REFERENCES travelos_holds(id),
                 tenant_id           UUID NOT NULL REFERENCES travelos_tenants(id),
                 stripe_session_id   TEXT NOT NULL UNIQUE,
                 stripe_payment_intent TEXT,
