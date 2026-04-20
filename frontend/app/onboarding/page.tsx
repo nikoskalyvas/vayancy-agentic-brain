@@ -36,7 +36,7 @@ function CopyBtn({ text }: { text: string }) {
   return <button onClick={() => { navigator.clipboard.writeText(text); setOk(true); setTimeout(()=>setOk(false),1500); }}
     className="text-xs text-vayancy-accent border border-vayancy-border px-2 py-1 rounded">{ok?"Copied!":"Copy"}</button>;
 }
-function Code({ children }: { children: string }) {
+function Code({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center justify-between bg-vayancy-bg border border-vayancy-border rounded-lg px-3 py-2 mt-1.5">
     <code className="text-xs text-vayancy-green font-mono break-all flex-1 mr-2">{children}</code>
     <CopyBtn text={children} />
