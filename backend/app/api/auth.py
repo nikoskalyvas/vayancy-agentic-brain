@@ -47,8 +47,6 @@ from app.core.auth_utils import (
 from app.core.email import send_email
 from app.db.session import get_pool
 
-_limiter = Limiter(key_func=get_remote_address)
-
 auth_router  = APIRouter(tags=["auth"])
 owner_router = APIRouter(tags=["owner"], dependencies=[Depends(get_current_owner)])
 log = structlog.get_logger()
@@ -144,7 +142,6 @@ async def _send_verify_email(email: str, name: str, token: str) -> None:
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @auth_router.post("/signup")
-@_limiter.limit("3/minute")
 async def signup(request: Request, body: SignupRequest) -> dict:
     """Create a new owner account. Sends verification email."""
     pool = await get_pool()
@@ -221,7 +218,6 @@ async def verify_email(token: str) -> dict:
 
 
 @auth_router.post("/login")
-@_limiter.limit("5/minute")
 async def login(request: Request, body: LoginRequest) -> dict:
     """Login with email + password. Returns JWT."""
     pool = await get_pool()
