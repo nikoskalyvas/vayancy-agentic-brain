@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, EmailStr
@@ -142,7 +142,7 @@ async def _send_verify_email(email: str, name: str, token: str) -> None:
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @auth_router.post("/signup")
-async def signup(request: Request, body: SignupRequest) -> dict:
+async def signup(request: Request, body: SignupRequest = Body(...)) -> dict:
     """Create a new owner account. Sends verification email."""
     pool = await get_pool()
 
@@ -218,7 +218,7 @@ async def verify_email(token: str) -> dict:
 
 
 @auth_router.post("/login")
-async def login(request: Request, body: LoginRequest) -> dict:
+async def login(request: Request, body: LoginRequest = Body(...)) -> dict:
     """Login with email + password. Returns JWT."""
     pool = await get_pool()
     user = await pool.fetchrow(
