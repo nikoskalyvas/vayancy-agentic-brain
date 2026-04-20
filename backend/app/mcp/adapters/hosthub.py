@@ -125,15 +125,12 @@ class HostHubAdapter(PMSAdapter):
         """
         rental_id = unit_id or self._rental_id
         try:
-            # Fetch calendar events updated since 30 days ago to ensure we
-            # have all current and future bookings
-            thirty_days_ago = int(
-                (datetime.utcnow() - timedelta(days=30)).timestamp()
-            )
+            # Fetch all visible calendar events — no date filter
+            # We need ALL active bookings/holds, not just recently updated ones
             data = await self._request(
                 "GET",
                 f"/rentals/{rental_id}/calendar-events",
-                params={"is_visible": "true", "updated_gte": thirty_days_ago},
+                params={"is_visible": "true"},
             )
 
             events = data.get("data", []) if isinstance(data, dict) else []
@@ -150,7 +147,7 @@ class HostHubAdapter(PMSAdapter):
             co = date.fromisoformat(check_out)
 
             for event in events:
-                if event.get("type") not in ("CalendarEventBooking", "CalendarEventHold"):
+                if event.get("type") not in ("Booking", "Hold"):
                     continue
                 ev_from = date.fromisoformat(event["date_from"])
                 ev_to   = date.fromisoformat(event["date_to"])
