@@ -44,12 +44,16 @@ _USE_VOYAGE = bool(settings.voyage_api_key)
 EMBEDDING_DIM = settings.voyage_dimensions if _USE_VOYAGE else 384
 
 if not _USE_VOYAGE:
-    # Lazy-load sentence-transformers only when Voyage AI is not configured.
-    # Avoids loading 90MB model on deployments that use Voyage AI.
-    from sentence_transformers import SentenceTransformer as _ST
-    _st_model = _ST("all-MiniLM-L6-v2")
-    log.info("embeddings_backend", backend="sentence-transformers",
-             dim=384, note="Set VOYAGE_API_KEY to switch to Voyage AI")
+    # sentence-transformers fallback — only import if actually needed
+    # If not installed, embeddings are disabled (no-op) until VOYAGE_API_KEY is set
+    try:
+        from sentence_transformers import SentenceTransformer as _ST
+        _st_model = _ST("all-MiniLM-L6-v2")
+        log.info("embeddings_backend", backend="sentence-transformers", dim=384)
+    except ImportError:
+        _st_model = None
+        log.warning("embeddings_backend", backend="none",
+                    note="Set VOYAGE_API_KEY for embeddings — sentence_transformers not installed")
 else:
     _st_model = None
     log.info("embeddings_backend", backend="voyage-ai",
@@ -83,9 +87,14 @@ async def _encode(text: str) -> list[float]:
             )
             resp.raise_for_status()
             return resp.json()["data"][0]["embedding"]
-    else:
+    elif _st_model is not None:
         # sentence-transformers path — CPU-bound, run in thread pool
         return await asyncio.to_thread(lambda: _st_model.encode(text).tolist())
+    else:
+        # No embedding backend configured — return zero vector
+        # Set VOYAGE_API_KEY to enable semantic memory
+        log.warning("embedding_skipped", reason="no_backend_configured")
+        return [0.0] * EMBEDDING_DIM
 
 
 class AgentMemory:
