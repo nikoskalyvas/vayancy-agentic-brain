@@ -41,6 +41,7 @@ log = structlog.get_logger()
 _API_BASE     = "https://app.hosthub.com/api/2019-03-01"
 _MAX_RETRIES  = 3
 _RETRY_STATUS = {429, 500, 502, 503, 504}
+_TIMEOUT      = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 
 
 def _cents_to_float(money: dict | None) -> float:
@@ -85,10 +86,10 @@ class HostHubAdapter(PMSAdapter):
         path: str,
         **kwargs,
     ) -> dict | list:
-        url = f"{_API_BASE}{path}"
+        url = path if path.startswith("http") else f"{_API_BASE}{path}"
         for attempt in range(_MAX_RETRIES):
             try:
-                async with httpx.AsyncClient(timeout=15) as client:
+                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                     r = await client.request(
                         method, url, headers=self._headers(), **kwargs
                     )

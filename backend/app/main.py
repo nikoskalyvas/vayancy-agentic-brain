@@ -28,6 +28,7 @@ from app.api.properties  import router as properties_router  # Stage 5
 from app.api.payments       import router as payments_router       # Stripe
 from app.api.dispute_defense import router as dispute_router        # Dispute prevention
 from app.api.auth import auth_router, owner_router                   # Owner self-service
+from app.api.villas import router as villas_router                   # Public villa search
 
 log = structlog.get_logger()
 
@@ -66,7 +67,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://owners.vayancy.gr", "http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "https://owners.vayancy.gr",
+        "https://vayancy.gr",
+        "https://www.vayancy.gr",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:10010",  # Local Sites WP dev
+    ],
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Tenant-Key", "X-Hub-Signature-256", "X-WebHotelier-Signature"],
 )
@@ -81,6 +89,7 @@ app.include_router(payments_router,   prefix="/payments")      # Stripe
 app.include_router(dispute_router,    prefix="/dispute")       # Dispute prevention
 app.include_router(auth_router,       prefix="/auth")           # Owner auth
 app.include_router(owner_router,      prefix="/owner")          # Owner dashboard
+app.include_router(villas_router,     prefix="/villas")         # Public villa search
 
 # Route reference:
 #

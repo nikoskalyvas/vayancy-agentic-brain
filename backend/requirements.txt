@@ -48,3 +48,6 @@ pytest-httpx==0.30.0
 stripe==10.4.0
 
 pgvector==0.3.2
+
+# Houfy price sync (browser automation)
+playwright==1.44.0

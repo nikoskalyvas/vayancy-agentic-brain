@@ -411,3 +411,19 @@ async def init_schema() -> None:
                 ON registered_properties (pms_property_id, pms_type, active);
         """)
 
+        # ── HostHub availability + rate cache ─────────────────────────────────
+        # Populated every 30 min by the refresh_hosthub_cache ARQ cron job.
+        # The /villas/search endpoint reads from here to avoid live HostHub calls.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hosthub_calendar_cache (
+                rental_id        TEXT        NOT NULL,
+                stay_date        DATE        NOT NULL,
+                available        BOOLEAN     NOT NULL DEFAULT TRUE,
+                price_per_night  NUMERIC(10,2),
+                fetched_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (rental_id, stay_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_hosthub_cache_rental_date
+                ON hosthub_calendar_cache (rental_id, stay_date);
+        """)
+

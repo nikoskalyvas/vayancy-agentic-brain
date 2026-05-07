@@ -8,6 +8,7 @@ Added:
 from __future__ import annotations
 import json
 import uuid
+from datetime import date
 from typing import Any
 
 import asyncpg
@@ -302,6 +303,37 @@ async def charge_day_notices(ctx: dict) -> None:
                         booking_id=str(r["id"]), error=str(e))
 
 
+async def scheduled_houfy_price_sync(ctx: dict) -> None:
+    """
+    Daily 05:00 — push PriceLabs nightly rates to Houfy pricing calendar.
+
+    Runs after the 04:00 Revenue Agent pricing review so that any rate
+    adjustments made by the Revenue Agent are reflected in Houfy within
+    the hour. Playwright runs headless inside the worker container.
+
+    Requires in .env:
+        HOUFY_EMAIL, HOUFY_PASSWORD
+        HOUFY_LISTING_ID_* (one per property)
+        HOSTHUB_API_KEY, HOSTHUB_RATE_PLAN_NIDRI, HOSTHUB_RATE_PLAN_BOAT,
+        HOSTHUB_RATE_PLAN_ADAMAN_NICOLETA, HOSTHUB_RATE_PLAN_ADAMAN_MARIA
+    """
+    try:
+        import sys
+        import os
+        # The scripts/ directory is mounted at /scripts inside the worker container
+        # (see docker-compose volume). Add it to sys.path so we can import the module.
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts")
+        scripts_dir = os.path.abspath(scripts_dir)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+        from sync_houfy_prices import run_sync  # type: ignore[import]
+        await run_sync(days=60, dry_run=False, visible=False, inspect=False)
+        log.info("houfy_price_sync_complete")
+    except Exception as e:
+        log.error("houfy_price_sync_failed", error=str(e))
+
+
 async def expire_stale_holds(ctx: dict) -> None:
     """
     TravelOS: mark holds whose TTL has passed as 'expired'.
@@ -325,7 +357,142 @@ async def expire_stale_holds(ctx: dict) -> None:
         log.info("holds_expired", count=count)
 
 
-# ── Lifecycle ─────────────────────────────────────────────────────────────────
+# ── HostHub availability cache refresh ────────────────────────────────────────
+
+def _parse_ical_blocked(ical_text: str, date_from: date, date_to: date) -> set[date]:
+    """
+    Parse a raw iCal string and return the set of dates in [date_from, date_to)
+    that are blocked by any VEVENT.
+
+    Handles DTSTART/DTEND in DATE format (YYYYMMDD) and DATETIME format
+    (YYYYMMDDTHHMMSSz / YYYYMMDDTHHMMSS). VEVENT end dates are exclusive
+    per the RFC (checkout day is NOT blocked), which aligns with how HostHub,
+    Booking.com, and mphb all export iCal.
+    """
+    import re
+    from datetime import date as _date, timedelta as _td
+
+    blocked: set[_date] = set()
+
+    for vevent in re.split(r"BEGIN:VEVENT", ical_text)[1:]:
+        # DTSTART — may have VALUE=DATE or VALUE=DATE-TIME param
+        start_m = re.search(r"DTSTART(?:;[^:]+)?:(\d{8})", vevent)
+        end_m   = re.search(r"DTEND(?:;[^:]+)?:(\d{8})", vevent)
+        if not start_m or not end_m:
+            continue
+        try:
+            ev_from = _date(
+                int(start_m.group(1)[:4]),
+                int(start_m.group(1)[4:6]),
+                int(start_m.group(1)[6:8]),
+            )
+            ev_to = _date(
+                int(end_m.group(1)[:4]),
+                int(end_m.group(1)[4:6]),
+                int(end_m.group(1)[6:8]),
+            )
+        except ValueError:
+            continue
+
+        current = max(ev_from, date_from)
+        while current < min(ev_to, date_to):
+            blocked.add(current)
+            current += _td(days=1)
+
+    return blocked
+
+
+async def _fetch_ical(url: str) -> str:
+    """Download a raw iCal feed. Raises on HTTP errors or timeout."""
+    import httpx
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0),
+        follow_redirects=True,
+    ) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.text
+
+
+async def refresh_hosthub_cache(ctx: dict) -> None:
+    """
+    Refresh the villa availability cache from iCal feeds for all managed villas.
+
+    Downloads each property's iCal URL, parses blocked dates, then upserts
+    90-day availability rows into hosthub_calendar_cache.
+    The /villas/search endpoint reads from this cache instead of calling
+    any PMS API live on user requests.
+
+    Uses iCal feeds rather than the HostHub REST API to avoid Railway →
+    HostHub networking issues (REST API hangs; iCal is served statically
+    and is not subject to the same proxy/firewall rules).
+
+    Runs every 30 minutes (see WorkerSettings.cron_jobs).
+    Also called once on worker startup so data is available immediately.
+
+    Rate data is not available from iCal — price_per_night will be NULL
+    in the cache (prices shown as None in the public API).
+
+    Requires env vars:
+        ICAL_BOAT, ICAL_NIDRI, ICAL_ADAMAN_NICOLETA, ICAL_ADAMAN_MARIA
+        ICAL_KTIMA_3BED, ICAL_KTIMA_2BED
+        ICAL_GARDEN_HOUSE (has a default value in config)
+    """
+    from datetime import date as _date, timedelta as _td
+    from app.db.hosthub_cache import upsert_calendar, CachedDay
+
+    today     = _date.today()
+    date_from = today
+    date_to   = today + _td(days=90)
+
+    # Map: cache_key → list of iCal URLs.
+    # A villa is available on a date only if ALL its units are unblocked.
+    # For multi-unit villas (Adaman, Ktima), each unit gets its own cache row
+    # and _check_villa takes the first available unit.
+    feeds: list[tuple[str, str]] = []  # (cache_key, ical_url)
+
+    for cache_key, url in [
+        ("boat-villa",        settings.ical_boat),
+        ("nidri-hills-villa", settings.ical_nidri),
+        ("adaman-nicoleta",   settings.ical_adaman_nicoleta),
+        ("adaman-maria",      settings.ical_adaman_maria),
+        ("ktima-3bed",        settings.ical_ktima_3bed),
+        ("ktima-2bed",        settings.ical_ktima_2bed),
+        ("garden-house",      settings.ical_garden_house),
+    ]:
+        if url:
+            feeds.append((cache_key, url))
+
+    if not feeds:
+        log.warning("ical_cache_skip", reason="no iCal URLs configured")
+        return
+
+    for cache_key, url in feeds:
+        try:
+            ical_text = await _fetch_ical(url)
+            blocked   = _parse_ical_blocked(ical_text, date_from, date_to)
+
+            days: list[CachedDay] = [
+                CachedDay(
+                    stay_date=today + _td(days=i),
+                    available=(today + _td(days=i)) not in blocked,
+                    price_per_night=None,  # iCal feeds carry no pricing data
+                )
+                for i in range(90)
+            ]
+
+            await upsert_calendar(cache_key, days)
+            log.info(
+                "ical_cache_refreshed",
+                cache_key=cache_key,
+                blocked_dates=len(blocked),
+            )
+
+        except Exception as e:
+            log.error("ical_cache_error", cache_key=cache_key, url=url, error=str(e))
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────────────────────
 
 async def startup(ctx: dict) -> None:
     await init_schema()
@@ -333,6 +500,8 @@ async def startup(ctx: dict) -> None:
     ctx["db_pool"] = pool
     ctx["memory"]  = AgentMemory(pool)
     log.info("arq_worker_started", property_id=settings.property_id)
+    # Pre-populate availability cache so /villas/search works immediately after deploy
+    await refresh_hosthub_cache(ctx)
 
 
 async def shutdown(ctx: dict) -> None:
@@ -352,6 +521,10 @@ class WorkerSettings:
         cron(charge_day_notices,          hour=7,  minute=0),
         # TravelOS: expire stale holds every 5 minutes
         cron(expire_stale_holds,          minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+        # Houfy: push PriceLabs rates to Houfy calendar daily after 04:00 pricing review
+        cron(scheduled_houfy_price_sync,  hour=5, minute=0),
+        # HostHub cache: refresh availability + rates every 30 min
+        cron(refresh_hosthub_cache,       minute={0, 30}),
     ]
     on_startup  = startup
     on_shutdown = shutdown

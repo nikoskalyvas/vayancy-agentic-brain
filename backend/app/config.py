@@ -99,6 +99,33 @@ class Settings(BaseSettings):
     stripe_secret_key:      str = ""   # sk_live_... or sk_test_...
     stripe_webhook_secret:  str = ""   # whsec_... from Stripe dashboard
 
+    # HostHub (villa availability & pricing for public villa search)
+    hosthub_api_key:               str = ""   # Settings → API Key in HostHub dashboard
+    hosthub_api_base:              str = "https://app.hosthub.com/api/2019-03-01"
+    # HostHub rental IDs (same as Pricelabs listing IDs)
+    hosthub_rental_adaman_nicoleta: str = ""  # Adaman Villas – Nicoleta unit
+    hosthub_rental_adaman_maria:    str = ""  # Adaman Villas – Maria unit
+    hosthub_rental_nidri:           str = ""  # Nidri Hills Villa
+    hosthub_rental_boat:            str = ""  # Boat Villa
+    # HostHub default rate-plan IDs (for pricing)
+    hosthub_rate_plan_adaman_nicoleta: str = ""
+    hosthub_rate_plan_adaman_maria:    str = ""
+    hosthub_rate_plan_nidri:           str = ""
+    hosthub_rate_plan_boat:            str = ""
+
+    # iCal feed URLs — used by refresh_hosthub_cache cron to populate availability cache.
+    # These are the HostHub/Booking.com/mphb iCal export URLs (tokens in the URL act as auth).
+    # HostHub properties (Lefkada)
+    ical_boat:            str = ""   # https://app.hosthub.com/rentals/422841/icalendar/...
+    ical_nidri:           str = ""   # https://app.hosthub.com/rentals/372945/icalendar/...
+    ical_adaman_nicoleta: str = ""   # https://app.hosthub.com/rentals/758329/icalendar/...
+    ical_adaman_maria:    str = ""   # https://app.hosthub.com/rentals/971651/icalendar/...
+    # Ktima Bird Paradise — two units from Booking.com
+    ical_ktima_3bed:      str = ""   # https://ical.booking.com/v1/export?t=...
+    ical_ktima_2bed:      str = ""   # https://ical.booking.com/v1/export?t=...
+    # Garden House (Crete) — mphb.ics feed from gardenhouse.gr
+    ical_garden_house:    str = "https://www.gardenhouse.gr/?feed=mphb.ics&accommodation_id=2006"
+
 
 @lru_cache
 def get_settings() -> Settings:
