@@ -443,7 +443,7 @@ async def refresh_hosthub_cache(ctx: dict) -> None:
 
     today     = _date.today()
     date_from = today
-    date_to   = today + _td(days=90)
+    date_to   = today + _td(days=365)
 
     # Map: cache_key → list of iCal URLs.
     # A villa is available on a date only if ALL its units are unblocked.
@@ -478,7 +478,7 @@ async def refresh_hosthub_cache(ctx: dict) -> None:
                     available=(today + _td(days=i)) not in blocked,
                     price_per_night=None,  # iCal feeds carry no pricing data
                 )
-                for i in range(90)
+                for i in range(365)
             ]
 
             await upsert_calendar(cache_key, days)
