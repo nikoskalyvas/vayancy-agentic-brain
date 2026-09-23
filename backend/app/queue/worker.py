@@ -314,7 +314,7 @@ async def scheduled_houfy_price_sync(ctx: dict) -> None:
     Requires in .env:
         HOUFY_EMAIL, HOUFY_PASSWORD
         HOUFY_LISTING_ID_* (one per property)
-        HOSTHUB_API_KEY, HOSTHUB_RATE_PLAN_NIDRI, HOSTHUB_RATE_PLAN_BOAT,
+        HOSTHUB_API_KEY, HOSTHUB_RATE_PLAN_NIDRI,
         HOSTHUB_RATE_PLAN_ADAMAN_NICOLETA, HOSTHUB_RATE_PLAN_ADAMAN_MARIA
     """
     try:
@@ -434,7 +434,7 @@ async def refresh_hosthub_cache(ctx: dict) -> None:
     in the cache (prices shown as None in the public API).
 
     Requires env vars:
-        ICAL_BOAT, ICAL_NIDRI, ICAL_ADAMAN_NICOLETA, ICAL_ADAMAN_MARIA
+        ICAL_NIDRI, ICAL_ADAMAN_NICOLETA, ICAL_ADAMAN_MARIA
         ICAL_KTIMA_3BED, ICAL_KTIMA_2BED
         ICAL_GARDEN_HOUSE (has a default value in config)
     """
@@ -452,7 +452,6 @@ async def refresh_hosthub_cache(ctx: dict) -> None:
     feeds: list[tuple[str, str]] = []  # (cache_key, ical_url)
 
     for cache_key, url in [
-        ("boat-villa",        settings.ical_boat),
         ("nidri-hills-villa", settings.ical_nidri),
         ("adaman-nicoleta",   settings.ical_adaman_nicoleta),
         ("adaman-maria",      settings.ical_adaman_maria),

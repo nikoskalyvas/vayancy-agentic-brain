@@ -10,7 +10,6 @@ Returns all Vayancy villas, each with:
 
 Managed villas (checked against HostHub):
   - Adaman Villas
-  - Boat Villa
   - Nidri Hills Villa
 
 Always-available villas (not yet on HostHub/PriceLabs):
@@ -56,18 +55,6 @@ log    = structlog.get_logger()
 #   hosthub_id: HostHub rental ID — None means always available
 
 _VILLAS: list[dict] = [
-    {
-        "key":        "boat-villa",
-        "name":       "Boat Villa",
-        "guests":     14,
-        "bedrooms":   "7",
-        "location":   "Geni, Lefkada, Greece",
-        "lat":        38.6763,
-        "lng":        20.7082,
-        "img":        "/images/boat.webp",
-        "link":       "/our-villas/boat-villa/",
-        "hosthub_id": "BOAT_RENTAL_ID",   # replaced by settings.hosthub_rental_boat
-    },
     {
         "key":        "nidri-hills-villa",
         "name":       "Nidri Hills Villa",
@@ -154,8 +141,6 @@ def _get_hosthub_id(villa: dict) -> str | list[str] | None:
         ids = [settings.hosthub_rental_adaman_nicoleta, settings.hosthub_rental_adaman_maria]
         ids = [i for i in ids if i]
         return ids if ids else None
-    elif key == "boat-villa":
-        return settings.hosthub_rental_boat or None
     elif key == "nidri-hills-villa":
         return settings.hosthub_rental_nidri or None
     return None
@@ -170,8 +155,6 @@ def _get_cache_keys(villa: dict) -> list[str] | None:
     Returns None for villas that have no iCal feed configured.
     """
     key = villa["key"]
-    if key == "boat-villa":
-        return ["boat-villa"] if settings.ical_boat else None
     if key == "nidri-hills-villa":
         return ["nidri-hills-villa"] if settings.ical_nidri else None
     if key == "adaman-villas":

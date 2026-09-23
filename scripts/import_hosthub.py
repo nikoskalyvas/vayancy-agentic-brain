@@ -7,7 +7,6 @@ API_BASE        = "https://app.hosthub.com/api/2019-03-01"
 
 RENTALS = [
     ("n19trsyt73", "Nidry Hills"),
-    ("quktckazxe", "Boat Villa"),
     ("bqke38mc1b", "Adaman_Nicoleta"),
     ("z3sc4f7avm", "Adaman_Maria"),
 ]

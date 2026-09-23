@@ -18,13 +18,11 @@ Add to .env:
 
     # One entry per property (Houfy listing ID from your dashboard URL)
     HOUFY_LISTING_ID_NIDRY_HILLS=123456
-    HOUFY_LISTING_ID_BOAT_VILLA=789012
     HOUFY_LISTING_ID_ADAMAN_NICOLETA=345678
     HOUFY_LISTING_ID_ADAMAN_MARIA=901234
 
     # PriceLabs listing IDs (from app.pricelabs.co → Listings)
     PRICELABS_PROPERTY_ID_NIDRY_HILLS=pl-nidry-id
-    PRICELABS_PROPERTY_ID_BOAT_VILLA=pl-boat-id
     PRICELABS_PROPERTY_ID_ADAMAN_NICOLETA=pl-adaman-n-id
     PRICELABS_PROPERTY_ID_ADAMAN_MARIA=pl-adaman-m-id
     # Falls back to PRICELABS_PROPERTY_ID if per-property keys are not set.
@@ -93,12 +91,6 @@ PROPERTY_MAPPINGS: list[dict] = [
         "pricelabs_id":         os.getenv("PRICELABS_PROPERTY_ID_NIDRY_HILLS",     ""),
         "hosthub_rate_plan_id": os.getenv("HOSTHUB_RATE_PLAN_NIDRI",               ""),
         "houfy_listing_id":     os.getenv("HOUFY_LISTING_ID_NIDRY_HILLS",          ""),
-    },
-    {
-        "name":                 "Boat Villa",
-        "pricelabs_id":         os.getenv("PRICELABS_PROPERTY_ID_BOAT_VILLA",      ""),
-        "hosthub_rate_plan_id": os.getenv("HOSTHUB_RATE_PLAN_BOAT",                ""),
-        "houfy_listing_id":     os.getenv("HOUFY_LISTING_ID_BOAT_VILLA",           ""),
     },
     {
         "name":                 "Adaman Nicoleta",
